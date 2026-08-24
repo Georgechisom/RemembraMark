@@ -7,7 +7,6 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 // Core data structures for RemembraMark exposure marks.
 // Defines the state model and data types for tracking liquidity exposure.
 library MarkTypes {
-    
     // Lifecycle status of an exposure mark.
     // Valid transitions:
     //      Open → Confirmed
@@ -33,6 +32,7 @@ library MarkTypes {
     // zeroForOne The direction of the swap that created the mark
     // status The current lifecycle status of the mark
     // swapper The address that initiated the swap creating this mark
+    // nonce The hook-local nonce ensuring uniqueness within same block/tick/swapper
     struct ExposureMark {
         PoolId poolId;
         int24 tickAtMark;
@@ -42,20 +42,34 @@ library MarkTypes {
         bool zeroForOne;
         MarkStatus status;
         address swapper;
+        uint256 nonce;
     }
 
     // Generate a deterministic mark identifier.
-    // Uses poolId, swapper, tick, and block to create collision-resistant ID.
-    // poolId The pool identifier
-    // swapper The address that initiated the swap
-    // tick The tick at mark creation
-    // blockNumber The block number of mark creation
-    // markId The deterministic mark identifier
-    function computeMarkId(PoolId poolId, address swapper, int24 tick, uint256 blockNumber)
-        internal
-        pure
-        returns (bytes32 markId)
-    {
-        markId = keccak256(abi.encodePacked(poolId, swapper, tick, blockNumber));
+    // 
+    // UNIQUENESS GUARANTEE:
+    // The combination of (poolId, swapper, tick, blockNumber, nonce) is structurally unique.
+    // A nonce is required because the same swapper can perform multiple swaps in the same
+    // block at the same tick (e.g., via a contract making multiple calls, or flash accounting).
+    //
+    // The nonce is a hook-local monotonic counter that increments per mark creation.
+    // This prevents collisions without requiring external transaction-specific data like
+    // tx.origin (which is unsafe) or msg.sender (which may be a router/aggregator).
+    //
+    // Alternative approaches considered:
+    // - tx.origin: Unsafe, can be manipulated via delegatecall patterns
+    // - msg.sender in callback: Would be the PoolManager, not useful
+    // - Transaction hash: Not available in EVM during execution
+    // - Swap parameters as differentiator: Still allows collision (same params, same block)
+    //
+    // The nonce approach is clean, gas-efficient, and provides true uniqueness.
+    function computeMarkId(
+        PoolId poolId,
+        address swapper,
+        int24 tick,
+        uint256 blockNumber,
+        uint256 nonce
+    ) internal pure returns (bytes32 markId) {
+        markId = keccak256(abi.encodePacked(poolId, swapper, tick, blockNumber, nonce));
     }
 }

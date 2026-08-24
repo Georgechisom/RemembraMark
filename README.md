@@ -2,13 +2,15 @@
 
 **Liquidity that remembers.**
 
-RemembraMark is an experimental Uniswap v4 hook that introduces an "economic memory" primitive for concentrated liquidity. Instead of treating material swaps as instantaneously forgotten events, RemembraMark creates **Exposure Marks** that track how liquidity interacts with significant market movements over time.
+RemembraMark is an experimental Uniswap v4 hook that introduces an "economic memory" primitive for concentrated liquidity. Instead of treating material swaps as instantaneously forgotten events, RemembraMark creates **Exposure Marks** that track how swaps interact with pools over time.
+
+⚠️ **Experimental Software**: This is a research prototype under active development. Not production ready. Not audited. Testnet only.
 
 ## Overview
 
 Traditional automated market makers treat each swap as an isolated event. Liquidity providers are exposed to adverse selection and toxic flow, but the protocol has no mechanism to distinguish between different types of market participants or remember past interactions.
 
-RemembraMark changes this by implementing a stateful observation model where material swaps create **Exposure Marks** that can be confirmed or cleared based on subsequent market behavior.
+RemembraMark implements a stateful observation model where material swaps create **Exposure Marks** that can be confirmed or cleared based on subsequent market behavior.
 
 ## Problem
 
@@ -26,7 +28,7 @@ Current AMM designs provide no protocol level mechanism to:
 
 ## Design Concept
 
-RemembraMark introduces a three state lifecycle for tracking liquidity exposure:
+RemembraMark introduces a three state lifecycle for tracking exposure:
 
 ```
 OPEN → CONFIRMED
@@ -50,36 +52,38 @@ This primitive enables future development of:
 
 An Exposure Mark captures:
 
-- **Pool context**: Which pool and tick range
+- **Pool context**: Which pool and price/tick
 - **Swap details**: Size, direction, timestamp
 - **Lifecycle state**: Open, Confirmed, or Cleared
 - **Resolution outcome**: When and how the mark was resolved
 
-Marks use deterministic identifiers derived from:
+Marks use deterministic identifiers with a monotonic nonce:
 
 ```solidity
-keccak256(poolId, swapper, tick, blockNumber)
+keccak256(poolId, swapper, tick, blockNumber, nonce)
 ```
 
-This design:
-
-- Avoids sequential ID storage costs
-- Enables efficient lookups
-- Provides collision resistance
+The nonce ensures uniqueness even when the same address performs multiple swaps in the same block at the same tick. This prevents collisions without requiring external transaction data.
 
 ## Mark Lifecycle
 
 ### Open
 
-A mark is created when a swap meets materiality criteria (currently under research). The mark enters observation mode, awaiting future market data.
+A mark is created when a swap meets materiality criteria. The mark enters observation mode, awaiting future market data.
+
+**Current status**: Materiality criteria not yet implemented. No marks are currently created.
 
 ### Confirmed
 
-If subsequent market movement indicates the swap created genuine LP exposure, the mark transitions to `Confirmed`. This signals that the liquidity provider experienced material adverse selection.
+If subsequent market movement indicates the swap created genuine LP exposure, the mark transitions to `Confirmed`.
+
+**Current status**: Confirmation criteria not yet implemented.
 
 ### Cleared
 
-If market conditions normalize without material LP impact, the mark transitions to `Cleared`. This indicates the swap did not create lasting exposure.
+If market conditions normalize without material LP impact, the mark transitions to `Cleared`.
+
+**Current status**: Clearing criteria not yet implemented.
 
 ### Invalid Transitions
 
@@ -97,13 +101,15 @@ The state machine enforces one-way transitions:
 ### Core Components
 
 **`RemembraMarkHook.sol`**  
-Main hook contract integrating with Uniswap v4. Observes swap lifecycle events and coordinates mark creation. Inherits from `BaseHook` and uses only `beforeSwap` and `afterSwap` permissions.
+Main hook contract integrating with Uniswap v4. Observes swap lifecycle events. Inherits from `BaseHook` and uses only `beforeSwap` and `afterSwap` permissions.
+
+**Important**: Current implementation performs **swap observation** at the pool level. It does NOT yet perform **liquidity exposure attribution** to specific LP ranges or positions.
 
 **`ExposureLedger.sol`**  
-Manages mark storage and state transitions. Enforces lifecycle rules and provides read access to mark data. Separated from hook integration for modularity.
+Manages mark storage and state transitions. Enforces lifecycle rules and provides read access to mark data. Includes eligibility checking for mark resolution.
 
 **`MarkTypes.sol`**  
-Core data structures and utilities. Defines `ExposureMark` struct, `MarkStatus` enum, and deterministic ID computation.
+Core data structures and utilities. Defines `ExposureMark` struct with nonce for uniqueness, `MarkStatus` enum, and deterministic ID computation.
 
 **`IRemembraMark.sol`**  
 External interface for mark queries and protocol interaction.
@@ -114,35 +120,88 @@ External interface for mark queries and protocol interaction.
 2. **Explicit state transitions** - Invalid state changes revert with clear errors
 3. **Separation of concerns** - Hook integration separated from accounting logic
 4. **No custody** - Protocol never holds user funds
-5. **Deterministic identifiers** - Efficient, collision-resistant mark IDs
+5. **Deterministic identifiers** - Collision-resistant mark IDs using nonce
 6. **Auditability** - Clean event emission for all state changes
 7. **Modularity** - Economic logic can evolve independently of core architecture
+8. **Permissionless resolution** - Eligibility enforced through economics, not access control
+
+## Swap Observation vs Liquidity Exposure Attribution
+
+### What Is Currently Implemented: Swap Observation
+
+The current hook observes swaps at the **pool level**:
+
+- Which pool was swapped against
+- Price/tick before and after
+- Swap size and direction
+- Swapper address
+
+These observations are sufficient to create exposure marks that represent **pool-level trading activity**.
+
+### What Is NOT Yet Implemented: Liquidity Exposure Attribution
+
+The current implementation does NOT identify:
+
+- Which specific liquidity ranges were crossed during the swap
+- How much liquidity was utilized in each tick range
+- Which individual LP positions were affected
+- Per position exposure amounts
+
+### Why This Distinction Matters
+
+True concentrated liquidity exposure tracking requires knowing which LP positions absorbed the swap. A swap that crosses many ticks affects different LPs than a swap contained in a single range.
+
+### Path to Range-Level Attribution
+
+Future development will require:
+
+1. **Additional hook permissions**
+   - Track liquidity additions/removals via `beforeAddLiquidity`/`afterAddLiquidity`
+   - Build a mapping of active ranges
+
+2. **Position state integration**
+   - Query Position Manager for active positions
+   - Track position lifecycle
+
+3. **Tick range accounting**
+   - Determine which ranges a swap crossed
+   - Calculate per-range exposure
+
+4. **Off-chain indexing**
+   - Index position events
+   - Provide Merkle proofs for on-chain verification
+
+The current architecture provides a clean foundation for this development without requiring a full rewrite.
 
 ## Current Implementation Status
 
-This branch (`remembramark-core`) establishes the foundational architecture:
+This branch (`remembramark-core`) establishes the foundational architecture.
 
 ✅ **Implemented:**
 
 - Core state model (Open/Confirmed/Cleared)
-- Exposure mark data structures
+- Exposure mark data structures with nonce-based uniqueness
 - Ledger storage and lifecycle management
-- Hook integration with Uniswap v4
-- Event emission for indexing
-- Deterministic mark identifiers
+- Hook integration with Uniswap v4 (swap observation)
+- Event emission for indexing (SwapObserved, ExposureMarked, MarkResolved)
+- Deterministic mark identifiers with collision resistance
 - State transition validation
+- Eligibility checking framework for resolution
+- Permissionless resolution with eligibility gates
 
 ❌ **Not Implemented (by design):**
 
-- Economic materiality thresholds
-- Confirmation/clearing criteria
-- Observation window logic
-- Settlement mechanics
-- LP rebates or fee adjustments
-- Governance or admin controls
+- Economic materiality thresholds (research phase)
+- Confirmation/clearing criteria (research phase)
+- Observation window logic (research phase)
+- Range-level liquidity exposure attribution (future phase)
+- Settlement mechanics (future phase)
+- LP rebates or fee adjustments (future phase)
+- Governance or admin controls (intentionally avoided)
+- Comprehensive testing (separate branch)
 - Production deployment infrastructure
 
-The current implementation is intentionally conservative. It establishes a clean foundation for research rather than prematurely implementing arbitrary economic parameters.
+**Current behavior**: The hook observes all swaps and emits `SwapObserved` events, but does NOT create exposure marks because materiality assessment returns `false`. This prevents premature mark creation with arbitrary thresholds.
 
 ## Repository Structure
 
@@ -185,10 +244,9 @@ forge build
 
 ### Testing
 
-Comprehensive testing will be performed on a separate branch. The current implementation focuses on architecture correctness.
+Comprehensive testing will be performed on a separate branch.
 
 ```bash
-# Tests will be expanded in future branches
 forge test
 ```
 
@@ -214,7 +272,7 @@ See the `script/` directory for pool creation, liquidity provision, and swap exe
 ### Uniswap v4 Integration
 
 - Uses OpenZeppelin's `BaseHook` implementation
-- Only enables `beforeSwap` and `afterSwap` permissions
+- Only enables `beforeSwap` and `afterSwap` permissions currently
 - No delta return (no direct swap intervention)
 - No fee override currently implemented
 - Compatible with v4-core state management
@@ -222,7 +280,7 @@ See the `script/` directory for pool creation, liquidity provision, and swap exe
 ### Gas Optimization
 
 - Minimal storage writes in critical path
-- Deterministic IDs avoid sequential counters
+- Monotonic nonce for uniqueness (single SLOAD/SSTORE)
 - Events over storage where appropriate
 - No unnecessary external calls in callbacks
 
@@ -232,7 +290,8 @@ See the `script/` directory for pool creation, liquidity provision, and swap exe
 - No upgradeability (inherits v4 architecture)
 - Explicit error messages for debugging
 - State transition validation prevents corruption
-- No admin priviliges for economic behavior
+- No admin privileges for economic behavior
+- Permissionless resolution gated by eligibility logic
 
 ## Research Questions
 
@@ -272,26 +331,32 @@ The following economic questions remain open for research:
 6. **How to prevent self-resolution?**
    - Can swapper trade again to clear their own mark?
    - Should there be a cooldown period?
-   - Role-based resolution?
+   - Permissionless vs role-based resolution?
+
+### Range-Level Attribution
+
+7. **How to identify affected liquidity ranges?**
+   - Track all positions via liquidity hooks?
+   - Off-chain indexing with on-chain verification?
+   - Integration with Position Manager?
+
+8. **How to calculate per-range exposure?**
+   - Proportional to liquidity in range?
+   - Based on tick ranges crossed?
+   - Time-weighted exposure?
 
 ### Economic Settlement
 
-7. **What happens to confirmed exposure?**
+9. **What happens to confirmed exposure?**
    - Fee rebates for LPs?
    - Penalty fees for confirmed swappers?
    - Redistributed to affected liquidity ranges?
 
-8. **How to account for exposure liability?**
-   - Maximum outstanding exposure limit?
-   - Reserve mechanisms?
-   - Cross-pool risk accounting?
+10. **How to account for exposure liability?**
 
-9. **Should the model be symmetric?**
-   - Different treatment for long/short exposure?
-   - Pool-specific parameters?
-   - Adaptive parameters based on realized outcomes?
-
-These questions require empirical research, economic modeling, and likely iterative refinement based on real world data.
+- Maximum outstanding exposure limit?
+- Reserve mechanisms?
+- Cross-pool risk accounting?
 
 ## Security Considerations
 
@@ -302,10 +367,11 @@ These questions require empirical research, economic modeling, and likely iterat
 - **Testnet only** - Do not deploy to mainnet with real funds
 - **Research code** - Intended for experimentation and iteration
 
-Known considerations:
+Known limitations:
 
 - Economic parameters are placeholders
 - Resolution logic not finalized
+- Range-level attribution not implemented
 - Gas optimization not complete
 - Edge cases may not be handled
 - No formal verification performed
@@ -314,19 +380,18 @@ Known considerations:
 
 ### Short Term (Next Branches)
 
-- Comprehensive test suite (unit, integration, fuzz)
-- Invariant testing for state machine
+- Comprehensive test suite (unit, integration, fuzz, invariant)
 - Gas optimization analysis
 - Economic parameter research
 - Empirical data collection from testnet
 
 ### Medium Term
 
+- Materiality assessment implementation
 - Confirmation/clearing criteria implementation
 - Observation window logic
-- Materiality assessment algorithms
+- Range-level exposure attribution architecture
 - Settlement mechanics design
-- Fee adjustment integration
 
 ### Long Term
 
@@ -334,7 +399,7 @@ Known considerations:
 - LP-specific exposure tracking
 - Advanced analytics and reporting
 - Formal verification of state machine
-- Economic parameter governance
+- Economic parameter governance (if needed)
 - Production deployment preparation
 
 ## License
@@ -343,4 +408,4 @@ MIT
 
 ## Disclaimer
 
-RemembraMark is experimental software provided "as is" without warranties. Use at your own risk. The protocol is under active research and should not be used in production environments.
+RemembraMark is experimental software provided "as is" without warranties. Use at your own risk. The protocol is under active research and development. Not intended for production use.
