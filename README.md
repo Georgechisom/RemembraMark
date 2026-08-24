@@ -1,183 +1,411 @@
-# Uniswap v4 Hook Template
+# RemembraMark
 
-**A template for writing Uniswap v4 Hooks 🦄**
+**Liquidity that remembers.**
 
-### Get Started
+RemembraMark is an experimental Uniswap v4 hook that introduces an "economic memory" primitive for concentrated liquidity. Instead of treating material swaps as instantaneously forgotten events, RemembraMark creates **Exposure Marks** that track how swaps interact with pools over time.
 
-This template provides a starting point for writing Uniswap v4 Hooks, including a simple example and preconfigured test environment. Start by creating a new repository using the "Use this template" button at the top right of this page. Alternatively you can also click this link:
+⚠️ **Experimental Software**: This is a research prototype under active development. Not production ready. Not audited. Testnet only.
 
-[![Use this Template](https://img.shields.io/badge/Use%20this%20Template-101010?style=for-the-badge&logo=github)](https://github.com/uniswapfoundation/v4-template/generate)
+## Overview
 
-1. The example hook [Counter.sol](src/Counter.sol) demonstrates the `beforeSwap()` and `afterSwap()` hooks
-2. The test template [Counter.t.sol](test/Counter.t.sol) preconfigures the v4 pool manager, test tokens, and test liquidity.
+Traditional automated market makers treat each swap as an isolated event. Liquidity providers are exposed to adverse selection and toxic flow, but the protocol has no mechanism to distinguish between different types of market participants or remember past interactions.
 
-<details>
-<summary>Updating to v4-template:latest</summary>
+RemembraMark implements a stateful observation model where material swaps create **Exposure Marks** that can be confirmed or cleared based on subsequent market behavior.
 
-This template is actively maintained -- you can update the v4 dependencies, scripts, and helpers:
+## Problem
+
+Concentrated liquidity providers face systematic losses from:
+
+1. **Adverse selection**: Informed traders extract value through timely swaps
+2. **Toxic flow**: MEV bots and arbitrageurs trade against stale prices
+3. **Information asymmetry**: LP positions cannot distinguish trade quality
+
+Current AMM designs provide no protocol level mechanism to:
+
+- Identify swaps that create meaningful exposure
+- Track whether that exposure materializes into LP losses
+- Differentiate between benign trading and value extraction
+
+## Design Concept
+
+RemembraMark introduces a three state lifecycle for tracking exposure:
+
+```
+OPEN → CONFIRMED
+  ↓
+CLEARED
+```
+
+When a materially significant swap occurs, the protocol creates an **Exposure Mark** in the `Open` state. Over an observation window, subsequent market behavior determines whether the exposure:
+
+- **Confirms** (the swap predicted price movement harmful to LPs)
+- **Clears** (market conditions normalized, minimal LP impact)
+
+This primitive enables future development of:
+
+- Differentiated fee structures based on exposure patterns
+- LP protection mechanisms
+- Sophisticated accounting of realized vs. unrealized exposure
+- Analytics for trade quality and pool health
+
+## Exposure Marks
+
+An Exposure Mark captures:
+
+- **Pool context**: Which pool and price/tick
+- **Swap details**: Size, direction, timestamp
+- **Lifecycle state**: Open, Confirmed, or Cleared
+- **Resolution outcome**: When and how the mark was resolved
+
+Marks use deterministic identifiers with a monotonic nonce:
+
+```solidity
+keccak256(poolId, swapper, tick, blockNumber, nonce)
+```
+
+The nonce ensures uniqueness even when the same address performs multiple swaps in the same block at the same tick. This prevents collisions without requiring external transaction data.
+
+## Mark Lifecycle
+
+### Open
+
+A mark is created when a swap meets materiality criteria. The mark enters observation mode, awaiting future market data.
+
+**Current status**: Materiality criteria not yet implemented. No marks are currently created.
+
+### Confirmed
+
+If subsequent market movement indicates the swap created genuine LP exposure, the mark transitions to `Confirmed`.
+
+**Current status**: Confirmation criteria not yet implemented.
+
+### Cleared
+
+If market conditions normalize without material LP impact, the mark transitions to `Cleared`.
+
+**Current status**: Clearing criteria not yet implemented.
+
+### Invalid Transitions
+
+The state machine enforces one-way transitions:
+
+- ✅ Open → Confirmed
+- ✅ Open → Cleared
+- ❌ Confirmed → Open
+- ❌ Confirmed → Cleared
+- ❌ Cleared → Open
+- ❌ Cleared → Confirmed
+
+## Architecture
+
+### Core Components
+
+**`RemembraMarkHook.sol`**  
+Main hook contract integrating with Uniswap v4. Observes swap lifecycle events. Inherits from `BaseHook` and uses only `beforeSwap` and `afterSwap` permissions.
+
+**Important**: Current implementation performs **swap observation** at the pool level. It does NOT yet perform **liquidity exposure attribution** to specific LP ranges or positions.
+
+**`ExposureLedger.sol`**  
+Manages mark storage and state transitions. Enforces lifecycle rules and provides read access to mark data. Includes eligibility checking for mark resolution.
+
+**`MarkTypes.sol`**  
+Core data structures and utilities. Defines `ExposureMark` struct with nonce for uniqueness, `MarkStatus` enum, and deterministic ID computation.
+
+**`IRemembraMark.sol`**  
+External interface for mark queries and protocol interaction.
+
+### Design Principles
+
+1. **Minimal critical-path logic** - Hook callbacks contain only essential operations
+2. **Explicit state transitions** - Invalid state changes revert with clear errors
+3. **Separation of concerns** - Hook integration separated from accounting logic
+4. **No custody** - Protocol never holds user funds
+5. **Deterministic identifiers** - Collision-resistant mark IDs using nonce
+6. **Auditability** - Clean event emission for all state changes
+7. **Modularity** - Economic logic can evolve independently of core architecture
+8. **Permissionless resolution** - Eligibility enforced through economics, not access control
+
+## Swap Observation vs Liquidity Exposure Attribution
+
+### What Is Currently Implemented: Swap Observation
+
+The current hook observes swaps at the **pool level**:
+
+- Which pool was swapped against
+- Price/tick before and after
+- Swap size and direction
+- Swapper address
+
+These observations are sufficient to create exposure marks that represent **pool-level trading activity**.
+
+### What Is NOT Yet Implemented: Liquidity Exposure Attribution
+
+The current implementation does NOT identify:
+
+- Which specific liquidity ranges were crossed during the swap
+- How much liquidity was utilized in each tick range
+- Which individual LP positions were affected
+- Per position exposure amounts
+
+### Why This Distinction Matters
+
+True concentrated liquidity exposure tracking requires knowing which LP positions absorbed the swap. A swap that crosses many ticks affects different LPs than a swap contained in a single range.
+
+### Path to Range-Level Attribution
+
+Future development will require:
+
+1. **Additional hook permissions**
+   - Track liquidity additions/removals via `beforeAddLiquidity`/`afterAddLiquidity`
+   - Build a mapping of active ranges
+
+2. **Position state integration**
+   - Query Position Manager for active positions
+   - Track position lifecycle
+
+3. **Tick range accounting**
+   - Determine which ranges a swap crossed
+   - Calculate per-range exposure
+
+4. **Off-chain indexing**
+   - Index position events
+   - Provide Merkle proofs for on-chain verification
+
+The current architecture provides a clean foundation for this development without requiring a full rewrite.
+
+## Current Implementation Status
+
+This branch (`remembramark-core`) establishes the foundational architecture.
+
+✅ **Implemented:**
+
+- Core state model (Open/Confirmed/Cleared)
+- Exposure mark data structures with nonce-based uniqueness
+- Ledger storage and lifecycle management
+- Hook integration with Uniswap v4 (swap observation)
+- Event emission for indexing (SwapObserved, ExposureMarked, MarkResolved)
+- Deterministic mark identifiers with collision resistance
+- State transition validation
+- Eligibility checking framework for resolution
+- Permissionless resolution with eligibility gates
+
+❌ **Not Implemented (by design):**
+
+- Economic materiality thresholds (research phase)
+- Confirmation/clearing criteria (research phase)
+- Observation window logic (research phase)
+- Range-level liquidity exposure attribution (future phase)
+- Settlement mechanics (future phase)
+- LP rebates or fee adjustments (future phase)
+- Governance or admin controls (intentionally avoided)
+- Comprehensive testing (separate branch)
+- Production deployment infrastructure
+
+**Current behavior**: The hook observes all swaps and emits `SwapObserved` events, but does NOT create exposure marks because materiality assessment returns `false`. This prevents premature mark creation with arbitrary thresholds.
+
+## Repository Structure
+
+```
+src/
+├── RemembraMarkHook.sol        # Main hook contract
+├── ExposureLedger.sol          # Mark storage and lifecycle
+├── libraries/
+│   └── MarkTypes.sol           # Core data types
+└── interfaces/
+    └── IRemembraMark.sol       # External interface
+
+test/
+└── utils/                       # Testing infrastructure (from template)
+
+script/
+└── base/                        # Deployment helpers (from template)
+```
+
+## Development Setup
+
+### Prerequisites
+
+- [Foundry](https://book.getfoundry.sh/getting-started/installation) (stable version)
+- Git
+
+### Installation
 
 ```bash
-git remote add template https://github.com/uniswapfoundation/v4-template
-git fetch template
-git merge template/main <BRANCH> --allow-unrelated-histories
-```
-
-</details>
-
-### Requirements
-
-This template is designed to work with Foundry (stable). If you are using Foundry Nightly, you may encounter compatibility issues. You can update your Foundry installation to the latest stable version by running:
-
-```
-foundryup
-```
-
-To set up the project, run the following commands in your terminal to install dependencies and run the tests:
-
-```
+git clone <repository-url>
+cd remembramark
 forge install
+```
+
+### Build
+
+```bash
+forge build
+```
+
+### Testing
+
+Comprehensive testing will be performed on a separate branch.
+
+```bash
 forge test
 ```
 
-### Local Development
+## Local Development
 
-Other than writing unit tests (recommended!), you can only deploy & test hooks on [anvil](https://book.getfoundry.sh/anvil/) locally. Scripts are available in the `script/` directory, which can be used to deploy hooks, create pools, provide liquidity and swap tokens. The scripts support both local `anvil` environment as well as running them directly on a production network.
-
-### Executing locally with using **Anvil**:
-
-1. Start Anvil (or fork a specific chain using anvil):
+The repository includes scripts for local testing with Anvil:
 
 ```bash
+# Start local node
 anvil
-```
 
-or
-
-```bash
-anvil --fork-url <YOUR_RPC_URL>
-```
-
-2. Execute scripts:
-
-```bash
+# Deploy hook (in separate terminal)
 forge script script/00_DeployHook.s.sol \
     --rpc-url http://localhost:8545 \
     --private-key <PRIVATE_KEY> \
     --broadcast
 ```
 
-### Using **RPC URLs** (actual transactions):
+See the `script/` directory for pool creation, liquidity provision, and swap execution examples.
 
-:::info
-It is best to not store your private key even in .env or enter it directly in the command line. Instead use the `--account` flag to select your private key from your keystore.
-:::
+## Design Constraints
 
-### Follow these steps if you have not stored your private key in the keystore:
+### Uniswap v4 Integration
 
-<details>
+- Uses OpenZeppelin's `BaseHook` implementation
+- Only enables `beforeSwap` and `afterSwap` permissions currently
+- No delta return (no direct swap intervention)
+- No fee override currently implemented
+- Compatible with v4-core state management
 
-1. Add your private key to the keystore:
+### Gas Optimization
 
-```bash
-cast wallet import <SET_A_NAME_FOR_KEY> --interactive
-```
+- Minimal storage writes in critical path
+- Monotonic nonce for uniqueness (single SLOAD/SSTORE)
+- Events over storage where appropriate
+- No unnecessary external calls in callbacks
 
-2. You will prompted to enter your private key and set a password, fill and press enter:
+### Security Model
 
-```
-Enter private key: <YOUR_PRIVATE_KEY>
-Enter keystore password: <SET_NEW_PASSWORD>
-```
+- No fund custody
+- No upgradeability (inherits v4 architecture)
+- Explicit error messages for debugging
+- State transition validation prevents corruption
+- No admin privileges for economic behavior
+- Permissionless resolution gated by eligibility logic
 
-You should see this:
+## Research Questions
 
-```
-`<YOUR_WALLET_PRIVATE_KEY_NAME>` keystore was saved successfully. Address: <YOUR_WALLET_ADDRESS>
-```
+The following economic questions remain open for research:
 
-::: warning
-Use `history -c` to clear your command history.
-:::
+### Materiality Assessment
 
-</details>
+1. **What constitutes a material swap?**
+   - Absolute amount thresholds?
+   - Relative to pool liquidity?
+   - Price impact percentage?
+   - Tick displacement magnitude?
 
-1. Execute scripts:
+2. **How to normalize across pools?**
+   - Different pools have different liquidity profiles
+   - Stablecoin pairs vs. volatile pairs require different criteria
+   - Tick spacing affects sensitivity
 
-```bash
-forge script script/00_DeployHook.s.sol \
-    --rpc-url <YOUR_RPC_URL> \
-    --account <YOUR_WALLET_PRIVATE_KEY_NAME> \
-    --sender <YOUR_WALLET_ADDRESS> \
-    --broadcast
-```
+3. **How to prevent gaming?**
+   - Many small swaps to manufacture exposure?
+   - Self-trading to create and resolve marks?
+   - LP position churn to farm benefits?
 
-You will prompted to enter your wallet password, fill and press enter:
+### Confirmation Logic
 
-```
-Enter keystore password: <YOUR_PASSWORD>
-```
+4. **What market movement confirms exposure?**
+   - Absolute price change?
+   - Relative to swap size?
+   - Time-weighted price change?
+   - Liquidity-adjusted impact?
 
-### Key Modifications to note:
+5. **What observation window should be used?**
+   - Block count?
+   - Time-based (requires oracle)?
+   - Adaptive based on volatility?
 
-1. Update the `token0` and `token1` addresses in the `BaseScript.sol` file to match the tokens you want to use in the network of your choice for sepolia and mainnet deployments.
-2. Update the `token0Amount` and `token1Amount` in the `CreatePoolAndAddLiquidity.s.sol` file to match the amount of tokens you want to provide liquidity with.
-3. Update the `token0Amount` and `token1Amount` in the `AddLiquidity.s.sol` file to match the amount of tokens you want to provide liquidity with.
-4. Update the `amountIn` and `amountOutMin` in the `Swap.s.sol` file to match the amount of tokens you want to swap.
+6. **How to prevent self-resolution?**
+   - Can swapper trade again to clear their own mark?
+   - Should there be a cooldown period?
+   - Permissionless vs role-based resolution?
 
-### Verifying the hook contract
+### Range-Level Attribution
 
-```bash
-forge verify-contract \
-  --rpc-url <URL> \
-  --chain <CHAIN_NAME_OR_ID> \
-  # Generally etherscan
-  --verifier <Verification_Provider> \
-  # Use --etherscan-api-key <ETHERSCAN_API_KEY> if you are using etherscan
-  --verifier-api-key <Verification_Provider_API_KEY> \
-  --constructor-args <ABI_ENCODED_ARGS> \
-  --num-of-optimizations <OPTIMIZER_RUNS> \
-  <Contract_Address> \
-  <path/to/Contract.sol:ContractName>
-  --watch
-```
+7. **How to identify affected liquidity ranges?**
+   - Track all positions via liquidity hooks?
+   - Off-chain indexing with on-chain verification?
+   - Integration with Position Manager?
 
-### Troubleshooting
+8. **How to calculate per-range exposure?**
+   - Proportional to liquidity in range?
+   - Based on tick ranges crossed?
+   - Time-weighted exposure?
 
-<details>
+### Economic Settlement
 
-#### Permission Denied
+9. **What happens to confirmed exposure?**
+   - Fee rebates for LPs?
+   - Penalty fees for confirmed swappers?
+   - Redistributed to affected liquidity ranges?
 
-When installing dependencies with `forge install`, Github may throw a `Permission Denied` error
+10. **How to account for exposure liability?**
 
-Typically caused by missing Github SSH keys, and can be resolved by following the steps [here](https://docs.github.com/en/github/authenticating-to-github/connecting-to-github-with-ssh)
+- Maximum outstanding exposure limit?
+- Reserve mechanisms?
+- Cross-pool risk accounting?
 
-Or [adding the keys to your ssh-agent](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent#adding-your-ssh-key-to-the-ssh-agent), if you have already uploaded SSH keys
+## Security Considerations
 
-#### Anvil fork test failures
+⚠️ **This is experimental software under active development.**
 
-Some versions of Foundry may limit contract code size to ~25kb, which could prevent local tests to fail. You can resolve this by setting the `code-size-limit` flag
+- **Not audited** - No professional security review has been conducted
+- **Not production-ready** - Economic model incomplete
+- **Testnet only** - Do not deploy to mainnet with real funds
+- **Research code** - Intended for experimentation and iteration
 
-```
-anvil --code-size-limit 40000
-```
+Known limitations:
 
-#### Hook deployment failures
+- Economic parameters are placeholders
+- Resolution logic not finalized
+- Range-level attribution not implemented
+- Gas optimization not complete
+- Edge cases may not be handled
+- No formal verification performed
 
-Hook deployment failures are caused by incorrect flags or incorrect salt mining
+## Future Work
 
-1. Verify the flags are in agreement:
-   - `getHookCalls()` returns the correct flags
-   - `flags` provided to `HookMiner.find(...)`
-2. Verify salt mining is correct:
-   - In **forge test**: the _deployer_ for: `new Hook{salt: salt}(...)` and `HookMiner.find(deployer, ...)` are the same. This will be `address(this)`. If using `vm.prank`, the deployer will be the pranking address
-   - In **forge script**: the deployer must be the CREATE2 Proxy: `0x4e59b44847b379578588920cA78FbF26c0B4956C`
-     - If anvil does not have the CREATE2 deployer, your foundry may be out of date. You can update it with `foundryup`
+### Short Term (Next Branches)
 
-</details>
+- Comprehensive test suite (unit, integration, fuzz, invariant)
+- Gas optimization analysis
+- Economic parameter research
+- Empirical data collection from testnet
 
-### Additional Resources
+### Medium Term
 
-- [Uniswap v4 docs](https://docs.uniswap.org/contracts/v4/overview)
-- [v4-periphery](https://github.com/uniswap/v4-periphery)
-- [v4-core](https://github.com/uniswap/v4-core)
-- [v4-by-example](https://v4-by-example.org)
+- Materiality assessment implementation
+- Confirmation/clearing criteria implementation
+- Observation window logic
+- Range-level exposure attribution architecture
+- Settlement mechanics design
+
+### Long Term
+
+- Multi-pool exposure aggregation
+- LP-specific exposure tracking
+- Advanced analytics and reporting
+- Formal verification of state machine
+- Economic parameter governance (if needed)
+- Production deployment preparation
+
+## License
+
+MIT
+
+## Disclaimer
+
+RemembraMark is experimental software provided "as is" without warranties. Use at your own risk. The protocol is under active research and development. Not intended for production use.
