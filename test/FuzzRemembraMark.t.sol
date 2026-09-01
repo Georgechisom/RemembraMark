@@ -8,14 +8,20 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 // Test ledger implementation for fuzz testing
 contract FuzzTestLedger is ExposureLedger {
+    function canResolveMark(bytes32) public pure override returns (bool) {
+        return false;
+    }
+
     function createMarkForTesting(
         PoolId poolId,
         address swapper,
         int24 tickAtMark,
         int256 swapAmountSpecified,
-        bool zeroForOne
+        bool zeroForOne,
+        uint160 sqrtPriceAtMark,
+        uint256 exposureMagnitude
     ) external returns (bytes32) {
-        return createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne);
+        return createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne, sqrtPriceAtMark, exposureMagnitude);
     }
 
     function confirmMarkForTesting(bytes32 markId) external {
@@ -50,12 +56,14 @@ contract FuzzRemembraMarkTest is Test {
         count = uint8(bound(count, 1, 20));
 
         PoolId poolId = PoolId.wrap(poolIdRaw);
+        uint160 testSqrtPrice = 79228162514264337593543950336;
+        uint256 testExposure = 15000;
 
         bytes32[] memory markIds = new bytes32[](count);
 
         // Create multiple marks with same parameters
         for (uint256 i = 0; i < count; i++) {
-            markIds[i] = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
+            markIds[i] = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction, testSqrtPrice, testExposure);
         }
 
         // Verify all IDs are unique
@@ -75,8 +83,10 @@ contract FuzzRemembraMarkTest is Test {
         bool direction
     ) public {
         PoolId poolId = PoolId.wrap(poolIdRaw);
+        uint160 testSqrtPrice = 79228162514264337593543950336;
+        uint256 testExposure = 15000;
 
-        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction, testSqrtPrice, testExposure);
         ledger.confirmMarkForTesting(markId);
 
         // Verify status is Confirmed
@@ -99,8 +109,10 @@ contract FuzzRemembraMarkTest is Test {
         bool direction
     ) public {
         PoolId poolId = PoolId.wrap(poolIdRaw);
+        uint160 testSqrtPrice = 79228162514264337593543950336;
+        uint256 testExposure = 15000;
 
-        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction, testSqrtPrice, testExposure);
         ledger.clearMarkForTesting(markId);
 
         // Verify status is Cleared
@@ -123,9 +135,11 @@ contract FuzzRemembraMarkTest is Test {
         bool direction
     ) public {
         PoolId poolId = PoolId.wrap(poolIdRaw);
+        uint160 testSqrtPrice = 79228162514264337593543950336;
+        uint256 testExposure = 15000;
 
         uint256 blockBefore = block.number;
-        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction, testSqrtPrice, testExposure);
 
         MarkTypes.ExposureMark memory mark = ledger.getMark(markId);
 
@@ -147,8 +161,10 @@ contract FuzzRemembraMarkTest is Test {
         bool confirmOrClear
     ) public {
         PoolId poolId = PoolId.wrap(poolIdRaw);
+        uint160 testSqrtPrice = 79228162514264337593543950336;
+        uint256 testExposure = 15000;
 
-        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction, testSqrtPrice, testExposure);
 
         // Advance block
         vm.roll(block.number + 10);
