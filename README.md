@@ -10,7 +10,7 @@ RemembraMark is an experimental Uniswap v4 hook that introduces an "economic mem
 
 Traditional automated market makers treat each swap as an isolated event. Liquidity providers are exposed to adverse selection and toxic flow, but the protocol has no mechanism to distinguish between different types of market participants or remember past interactions.
 
-RemembraMark implements a stateful observation model where material swaps create **Exposure Marks** that can be confirmed or cleared based on subsequent market behavior.
+RemembraMark implements a stateful observation model where material swaps create **Exposure Marks** that can be confirmed or cleared based on subsequent market behavior. This provides a foundation for tracking price movements that may correlate with persistent post-trade exposure.
 
 ## Problem
 
@@ -38,8 +38,29 @@ CLEARED
 
 When a materially significant swap occurs, the protocol creates an **Exposure Mark** in the `Open` state. Over an observation window, subsequent market behavior determines whether the exposure:
 
-- **Confirms** (the swap predicted price movement harmful to LPs)
-- **Clears** (market conditions normalized, minimal LP impact)
+- **Confirms** (price moved against swap direction, may correlate with persistent exposure)
+- **Clears** (market conditions normalized, price movement within normal range)
+
+### Exposure Mark Interpretation
+
+Confirmed marks indicate that price moved against the swap direction during the observation window. This price movement **may correlate** with:
+
+- Adverse selection (informed trader front-running price change)
+- Persistent post-trade exposure for LPs
+- Normal market volatility (false positive)
+
+Confirmation is a **proxy signal**, not definitive proof. The V1 mechanism is designed to:
+
+- Test the hypothesis that subsequent price movement can identify certain swap patterns
+- Collect empirical data on confirmation rates across different pool types
+- Provide a foundation for V2 economic mechanisms (rebates, dynamic fees)
+
+**V1 does NOT claim to:**
+
+- Perfectly identify toxic MEV
+- Guarantee LP protection
+- Eliminate adverse selection
+- Provide definitive proof of informed trading
 
 This primitive enables future development of:
 
@@ -75,15 +96,15 @@ A mark is created when a swap meets materiality criteria. The mark enters observ
 
 ### Confirmed
 
-If subsequent market movement indicates the swap created genuine LP exposure, the mark transitions to `Confirmed`.
+If subsequent market movement indicates the swap may have created persistent exposure, the mark transitions to `Confirmed`.
 
-**Current status**: Confirmation criteria not yet implemented.
+**Current status**: Confirmation criteria implemented as experimental V1 parameters (50 bps price movement threshold).
 
 ### Cleared
 
-If market conditions normalize without material LP impact, the mark transitions to `Cleared`.
+If market conditions normalize without material price movement against swap direction, the mark transitions to `Cleared`.
 
-**Current status**: Clearing criteria not yet implemented.
+**Current status**: Clearing criteria implemented as experimental V1 parameters (observation window elapsed without confirmation).
 
 ### Invalid Transitions
 
@@ -201,7 +222,7 @@ This branch (`remembramark-core`) establishes the foundational architecture.
 - Comprehensive testing (separate branch)
 - Production deployment infrastructure
 
-**Current behavior**: The hook observes all swaps and emits `SwapObserved` events, but does NOT create exposure marks because materiality assessment returns `false`. This prevents premature mark creation with arbitrary thresholds.
+**Current behavior**: The hook observes all swaps and emits `SwapObserved` events. Material swaps (exceeding the experimental threshold) create exposure marks. Marks can be resolved after the observation window (25 blocks) to Confirmed or Cleared status based on price movement.
 
 ## Repository Structure
 

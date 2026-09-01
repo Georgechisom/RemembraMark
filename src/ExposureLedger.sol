@@ -7,7 +7,7 @@ import {MarkTypes} from "./libraries/MarkTypes.sol";
 // Manages the storage and lifecycle of exposure marks.
 // Handles mark creation, resolution, and state validation.
 // Does NOT implement economic settlement mechanics in this version.
-contract ExposureLedger {
+abstract contract ExposureLedger {
     using MarkTypes for *;
 
     // Mapping from mark ID to exposure mark
@@ -26,7 +26,9 @@ contract ExposureLedger {
         int256 swapAmountSpecified,
         bool zeroForOne,
         uint256 creationBlock,
-        uint256 nonce
+        uint256 nonce,
+        uint160 sqrtPriceAtMark,
+        uint256 exposureMagnitude
     );
 
     // Emitted when a mark is resolved
@@ -48,10 +50,15 @@ contract ExposureLedger {
 
     // Create a new open exposure mark.
     // Mark ID is deterministically computed from parameters plus unique nonce.
-    function createMark(PoolId poolId, address swapper, int24 tickAtMark, int256 swapAmountSpecified, bool zeroForOne)
-        internal
-        returns (bytes32 markId)
-    {
+    function createMark(
+        PoolId poolId,
+        address swapper,
+        int24 tickAtMark,
+        int256 swapAmountSpecified,
+        bool zeroForOne,
+        uint160 sqrtPriceAtMark,
+        uint256 exposureMagnitude
+    ) internal returns (bytes32 markId) {
         uint256 nonce = _markNonce++;
 
         markId = MarkTypes.computeMarkId(poolId, swapper, tickAtMark, block.number, nonce);
@@ -70,43 +77,40 @@ contract ExposureLedger {
             zeroForOne: zeroForOne,
             status: MarkTypes.MarkStatus.Open,
             swapper: swapper,
-            nonce: nonce
+            nonce: nonce,
+            sqrtPriceAtMark: sqrtPriceAtMark,
+            exposureMagnitude: exposureMagnitude
         });
 
-        emit ExposureMarked(markId, poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne, block.number, nonce);
+        emit ExposureMarked(
+            markId,
+            poolId,
+            swapper,
+            tickAtMark,
+            swapAmountSpecified,
+            zeroForOne,
+            block.number,
+            nonce,
+            sqrtPriceAtMark,
+            exposureMagnitude
+        );
     }
 
     // Check if a mark is eligible for resolution.
     //
-    // PLACEHOLDER: This is where economic resolution conditions will be evaluated.
-    // Current implementation returns false for all marks, preventing arbitrary resolution.
+    // ECONOMIC RESOLUTION CONDITIONS (V1):
+    // 1. Mark must exist and be in Open status
+    // 2. Observation window must have elapsed (OBSERVATION_WINDOW_BLOCKS)
+    // 3. Price movement must be checked by implementing contract
     //
-    // Future implementation should check:
-    // - Observation window has elapsed
-    // - Price movement criteria met
-    // - Market conditions observed
-    // - No gaming/manipulation detected
+    // This is an abstract function because resolution requires access to
+    // current pool state (poolManager), which ExposureLedger doesn't have.
+    // Implementing contract (RemembraMarkHook) provides the economic logic.
     //
-    // This separation between eligibility and state transition ensures clean architecture.
-    function canResolveMark(bytes32 markId) public view virtual returns (bool eligible) {
-        MarkTypes.ExposureMark storage mark = _marks[markId];
-
-        // Mark must exist
-        if (mark.creationBlock == 0) {
-            return false;
-        }
-
-        // Mark must be in Open status
-        if (mark.status != MarkTypes.MarkStatus.Open) {
-            return false;
-        }
-
-        // Task: Add economic resolution conditions here
-        // For now, return false to prevent premature/arbitrary resolution
-        // This is intentionally conservative - resolution logic must be
-        // explicitly implemented before marks can be resolved in production
-        return false;
-    }
+    // RETURNS:
+    // - true if mark meets all eligibility criteria for resolution
+    // - false otherwise
+    function canResolveMark(bytes32 markId) public view virtual returns (bool eligible);
 
     // Resolve an open mark to Confirmed status.
     // Only valid from Open status and when eligibility conditions are met.
