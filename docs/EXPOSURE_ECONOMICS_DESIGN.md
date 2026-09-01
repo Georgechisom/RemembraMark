@@ -72,15 +72,15 @@ Exposure(swap) = |ΔPrice_bps| × L_active_normalized
 Where:
 `|ΔPrice_bps|` = Absolute price change from swap in basis points (dimensionless ratio × 10000)
 `L_active_normalized` = Active liquidity at swap execution (from `StateLibrary.getLiquidity()`) / 1e18
-`exposure result` = Dimensionless magnitude in basis points
+`exposure result` = Dimensionless score
 
 ### Units and Dimensions
 
-The exposure formula produces a **dimensionless magnitude**:
+The exposure formula produces a **dimensionless score**:
 
 - Input: price change (dimensionless ratio, scaled to basis points)
 - Input: active liquidity at current price (uint128, normalized by 1e18)
-- Output: basis points (dimensionless, product of above)
+- Output: dimensionless score (product of above)
 
 **The result is NOT:**
 
@@ -536,7 +536,7 @@ Storage cost: 3 additional SSTOREs per mark (~60k gas)
 
 ```solidity
 // Immutable configuration
-uint256 public immutable MIN_EXPOSURE_THRESHOLD;    // e.g., 1000e6 (1k USDC)
+uint256 public immutable MIN_EXPOSURE_SCORE;        // e.g., 10000 (dimensionless score)
 uint256 public immutable OBSERVATION_WINDOW;        // e.g., 25 blocks
 uint256 public immutable CONFIRM_THRESHOLD_BPS;     // e.g., 30 (0.3%)
 
@@ -817,7 +817,7 @@ Additions:
 
 ```solidity
 // Materiality
-MIN_EXPOSURE_THRESHOLD = 1000e6;  // $1k USD equivalent in quote token
+MIN_EXPOSURE_SCORE = 10000;  // Dimensionless score threshold
 
 // Observation
 OBSERVATION_WINDOW = 25;  // blocks (~5 min on mainnet)
@@ -835,7 +835,7 @@ ATTRIBUTION_MODEL = POOL_LEVEL;  // No per-range tracking in V1
 
    ```solidity
    exposure = |priceChange_bps| × activeLiquidity_normalized
-   return exposure >= MIN_EXPOSURE_THRESHOLD_BPS
+   return exposure >= MIN_EXPOSURE_SCORE
    ```
 
 2. Mark Creation (already implemented):
@@ -863,7 +863,7 @@ ATTRIBUTION_MODEL = POOL_LEVEL;  // No per-range tracking in V1
 
    ```solidity
    require(msg.sender != mark.swapper, "No self-resolution");
-   require(exposure >= MIN_EXPOSURE_THRESHOLD, "Below threshold");
+   require(exposureScore >= MIN_EXPOSURE_SCORE, "Below threshold");
    ```
 
 5. Events & Analytics:
@@ -950,8 +950,8 @@ Justification: Perfect classification is impossible on-chain. Statistical aggreg
        uint160 sqrtPriceAfter = ... // from afterSwap
        uint128 liquidity = poolManager.getLiquidity(poolId);
 
-       uint256 exposure = calculateExposure(sqrtPriceBefore, sqrtPriceAfter, liquidity);
-       return exposure >= MIN_EXPOSURE_THRESHOLD;
+       uint256 exposureScore = calculateExposure(sqrtPriceBefore, sqrtPriceAfter, liquidity);
+       return exposureScore >= MIN_EXPOSURE_SCORE;
    }
    ```
 
@@ -975,7 +975,7 @@ Justification: Perfect classification is impossible on-chain. Statistical aggreg
 
 4. Configuration Constants:
    ```solidity
-   uint256 public constant MIN_EXPOSURE_THRESHOLD = 1000e6;
+   uint256 public constant MIN_EXPOSURE_SCORE = 10000;
    uint256 public constant OBSERVATION_WINDOW = 25;
    uint256 public constant CONFIRM_THRESHOLD_BPS = 50;
    ```
@@ -983,42 +983,42 @@ Justification: Perfect classification is impossible on-chain. Statistical aggreg
 ### Short Term (V1 Testing Phase)
 
 5. Comprehensive Test Suite:
-   - Unit tests for exposure calculation
-   - Integration tests with live pool simulation
-   - Fuzz tests for edge cases (very small/large swaps)
-   - Invariant tests for state machine
+   Unit tests for exposure calculation
+   Integration tests with live pool simulation
+   Fuzz tests for edge cases (very small/large swaps)
+   Invariant tests for state machine
 
 6. Testnet Deployment:
-   - Deploy to Sepolia/Goerli
-   - Create instrumented pool with mock tokens
-   - Execute synthetic swap patterns
-   - Collect 1000+ swap samples
+   Deploy to Sepolia/Goerli
+   Create instrumented pool with mock tokens
+   Execute synthetic swap patterns
+   Collect 1000+ swap samples
 
 7. Analytics Dashboard:
-   - Off-chain indexer for events
-   - Visualization of:
-     - Confirmation rate over time
-     - Exposure distribution
-     - Time-to-resolution
-     - False positive rate (manual labeling)
+   Off-chain indexer for events
+   Visualization of:
+   Confirmation rate over time
+   Exposure distribution
+   Time-to-resolution
+   False positive rate (manual labeling)
 
 8. Parameter Tuning:
-   - Calibrate `CONFIRM_THRESHOLD_BPS` based on testnet data
-   - Adjust `MIN_EXPOSURE_THRESHOLD` per pool characteristics
-   - Validate `OBSERVATION_WINDOW` captures meaningful price movements
+   Calibrate `CONFIRM_THRESHOLD_BPS` based on testnet data
+   Adjust `MIN_EXPOSURE_SCORE` per pool characteristics
+   Validate `OBSERVATION_WINDOW` captures meaningful price movements
 
 ### Medium Term (V2 Planning)
 
 9. Settlement Mechanism Design:
-   - Rebate calculation formula
-   - Fee reservation logic
-   - LP position tracking architecture
-   - Solvency management
+   Rebate calculation formula
+   Fee reservation logic
+   LP position tracking architecture
+   Solvency management
 
 10. Range-Level Attribution Research:
-    - Evaluate off-chain indexing vs. on-chain tracking
-    - Gas cost analysis for `afterAddLiquidity` approach
-    - Design Position Manager integration
+    Evaluate off-chain indexing vs. on-chain tracking
+    Gas cost analysis for `afterAddLiquidity` approach
+    Design Position Manager integration
 
 ## References
 

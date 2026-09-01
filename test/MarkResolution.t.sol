@@ -21,7 +21,8 @@ contract MarkResolutionLedger is ExposureLedger {
         uint160 sqrtPriceAtMark,
         uint256 exposureMagnitude
     ) external returns (bytes32) {
-        return createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne, sqrtPriceAtMark, exposureMagnitude);
+        return
+            createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne, sqrtPriceAtMark, exposureMagnitude);
     }
 
     function confirmMarkForTesting(bytes32 markId) external {
@@ -48,10 +49,9 @@ contract MarkResolutionTest is Test {
     function testOpenMarkCanBeConfirmed() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure);
 
         // Verify initial state
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Open));
@@ -72,10 +72,9 @@ contract MarkResolutionTest is Test {
     function testOpenMarkCanBeCleared() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure);
 
         // Verify initial state
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Open));
@@ -96,10 +95,9 @@ contract MarkResolutionTest is Test {
     function testCannotConfirmConfirmedMark() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure);
 
         ledger.confirmMarkForTesting(markId);
 
@@ -112,10 +110,9 @@ contract MarkResolutionTest is Test {
     function testCannotClearClearedMark() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure);
 
         ledger.clearMarkForTesting(markId);
 
@@ -128,10 +125,9 @@ contract MarkResolutionTest is Test {
     function testCannotClearConfirmedMark() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure);
 
         ledger.confirmMarkForTesting(markId);
 
@@ -144,10 +140,9 @@ contract MarkResolutionTest is Test {
     function testCannotConfirmClearedMark() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure);
 
         ledger.clearMarkForTesting(markId);
 
@@ -168,10 +163,9 @@ contract MarkResolutionTest is Test {
     function testCanResolveMarkReturnsFalse() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true, testSqrtPrice, testExposure);
 
         // Current implementation always returns false (economic logic not implemented)
         assertFalse(ledger.canResolveMark(markId));

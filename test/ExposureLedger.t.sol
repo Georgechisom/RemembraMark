@@ -24,7 +24,8 @@ contract ExposureLedgerForTesting is ExposureLedger {
         uint160 sqrtPriceAtMark,
         uint256 exposureMagnitude
     ) external returns (bytes32) {
-        return createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne, sqrtPriceAtMark, exposureMagnitude);
+        return
+            createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne, sqrtPriceAtMark, exposureMagnitude);
     }
 }
 
@@ -45,10 +46,9 @@ contract ExposureLedgerTest is Test {
     function testCreatesMarkWithCorrectState() public {
         uint160 testSqrtPrice = 79228162514264337593543950336; // 1:1 price
         uint256 testExposure = 15000; // 1.5% exposure
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure);
 
         MarkTypes.ExposureMark memory mark = ledger.getMark(markId);
         assertEq(PoolId.unwrap(mark.poolId), PoolId.unwrap(testPoolId));
@@ -68,7 +68,7 @@ contract ExposureLedgerTest is Test {
     function testEmitsExposureMarkedEvent() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
+
         // Compute the expected markId
         bytes32 expectedMarkId = MarkTypes.computeMarkId(testPoolId, testSwapper, 100, block.number, 0);
 
@@ -77,9 +77,8 @@ contract ExposureLedgerTest is Test {
             expectedMarkId, testPoolId, testSwapper, 100, 1000, true, block.number, 0, testSqrtPrice, testExposure
         );
 
-        bytes32 actualMarkId = ledger.createMarkForTesting(
-            testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure
-        );
+        bytes32 actualMarkId =
+            ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure);
 
         assertEq(actualMarkId, expectedMarkId, "Mark ID mismatch");
     }
@@ -88,14 +87,12 @@ contract ExposureLedgerTest is Test {
     function testCreatesUniqueMarkIds() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
+
         // Same parameters in same block should get different IDs via nonce
-        bytes32 markId1 = ledger.createMarkForTesting(
-            testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure
-        );
-        bytes32 markId2 = ledger.createMarkForTesting(
-            testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure
-        );
+        bytes32 markId1 =
+            ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure);
+        bytes32 markId2 =
+            ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure);
 
         assertTrue(markId1 != markId2);
 
@@ -110,10 +107,9 @@ contract ExposureLedgerTest is Test {
     function testMarkExistsReturnsTrueForCreatedMark() public {
         uint160 testSqrtPrice = 79228162514264337593543950336;
         uint256 testExposure = 15000;
-        
-        bytes32 markId = ledger.createMarkForTesting(
-            testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure
-        );
+
+        bytes32 markId =
+            ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true, testSqrtPrice, testExposure);
         assertTrue(ledger.markExists(markId));
     }
 

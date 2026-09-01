@@ -51,19 +51,19 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     // ECONOMIC PARAMETERS (V1 EXPERIMENTAL - NOT OPTIMIZED)
     // These values require empirical validation through testnet deployment.
     // Do NOT treat as production-ready constants.
-    
-    // Minimum exposure threshold for mark creation (dimensionless, in basis points)
-    // 10000 bps = 1% price impact × normalized liquidity magnitude
+
+    // Minimum exposure threshold for mark creation (dimensionless score)
+    // 10000 = 1% price impact × normalized liquidity magnitude
     // EXPERIMENTAL: Selected conservatively; requires calibration per pool type
     // Rationale: Focuses tracking on material swaps; prevents noise from tiny trades
-    uint256 public constant MIN_EXPOSURE_THRESHOLD_BPS = 10000;
-    
+    uint256 public constant MIN_EXPOSURE_SCORE = 10000;
+
     // Observation window for mark resolution (in blocks)
     // 25 blocks ≈ 5 minutes on mainnet (12s block time)
     // EXPERIMENTAL: Fixed window may be suboptimal for different volatility regimes
     // Rationale: Long enough for external price discovery, short enough for timely resolution
     uint256 public constant OBSERVATION_WINDOW_BLOCKS = 25;
-    
+
     // Price movement threshold to confirm persistent exposure (in basis points)
     // 50 bps = 0.5% price movement against swap direction
     // EXPERIMENTAL: Threshold to distinguish signal from noise; requires empirical tuning
@@ -120,7 +120,7 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         PoolId poolId = key.toId();
-        
+
         // Capture pre-swap price for exposure calculation in afterSwap
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
         _preSwapSqrtPrice[poolId] = sqrtPriceX96;
@@ -135,28 +135,22 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     // Observes all swaps and creates marks when materiality threshold is met.
     // SwapObserved events are emitted for all swaps regardless of materiality.
     // ExposureMarked events are only emitted when a mark is actually created.
-    function _afterSwap(
-        address sender,
-        PoolKey calldata key,
-        SwapParams calldata params,
-        BalanceDelta,
-        bytes calldata
-    ) internal override returns (bytes4, int128) {
+    function _afterSwap(address sender, PoolKey calldata key, SwapParams calldata params, BalanceDelta, bytes calldata)
+        internal
+        override
+        returns (bytes4, int128)
+    {
         _processSwapExposure(sender, key, params);
         return (BaseHook.afterSwap.selector, 0);
     }
 
     // Process swap exposure assessment and mark creation (internal helper to avoid stack too deep)
-    function _processSwapExposure(
-        address sender,
-        PoolKey calldata key,
-        SwapParams calldata params
-    ) internal {
+    function _processSwapExposure(address sender, PoolKey calldata key, SwapParams calldata params) internal {
         PoolId poolId = key.toId();
 
         // Get post-swap state
         (uint160 sqrtPriceAfter, int24 tickAfter,,) = poolManager.getSlot0(poolId);
-        
+
         // Retrieve pre-swap price captured in beforeSwap
         uint160 sqrtPriceBefore = _preSwapSqrtPrice[poolId];
 
@@ -166,22 +160,12 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
         // Get current active liquidity at current price (NOT total liquidity across all ranges)
         // This is the liquidity available for trading at the current tick
         uint128 liquidity = poolManager.getLiquidity(poolId);
-        (bool isMaterial, uint256 exposureMagnitude) = _assessMateriality(
-            sqrtPriceBefore,
-            sqrtPriceAfter,
-            liquidity
-        );
+        (bool isMaterial, uint256 exposureScore) = _assessMateriality(sqrtPriceBefore, sqrtPriceAfter, liquidity);
 
         // Only create mark if material
         if (isMaterial) {
             createMark(
-                poolId,
-                sender,
-                tickAfter,
-                params.amountSpecified,
-                params.zeroForOne,
-                sqrtPriceAfter,
-                exposureMagnitude
+                poolId, sender, tickAfter, params.amountSpecified, params.zeroForOne, sqrtPriceAfter, exposureScore
             );
             // ExposureMarked event emitted by createMark() in ledger
         }
@@ -189,17 +173,17 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
 
     // Assess whether a swap creates material exposure.
     //
-    // ECONOMIC FORMULA (DIMENSIONLESS):
-    // exposure_magnitude = |price_change_bps| × liquidity_normalized
-    // 
+    // ECONOMIC FORMULA (DIMENSIONLESS SCORE):
+    // exposureScore = |price_change_bps| × liquidity_normalized
+    //
     // Where:
     // - price_change_bps = ((sqrtPriceAfter² - sqrtPriceBefore²) / sqrtPriceBefore²) × 10000
     // - liquidity_normalized = active_liquidity / 1e18 (to prevent overflow)
     //
-    // UNITS: Dimensionless magnitude in basis points
+    // UNITS: Dimensionless exposure score
     // This is NOT:
     // - ❌ Quote token denominated
-    // - ❌ USD denominated  
+    // - ❌ USD denominated
     // - ❌ Directly convertible to economic loss
     //
     // The result serves as a RELATIVE INDICATOR of swap impact on active liquidity.
@@ -212,14 +196,14 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     // - Normalizes active liquidity to prevent uint256 overflow
     //
     // RETURNS:
-    // - true if exposure >= MIN_EXPOSURE_THRESHOLD_BPS
+    // - true if exposureScore >= MIN_EXPOSURE_SCORE
     // - false otherwise (no mark created)
-    // - exposure magnitude (dimensionless, in basis points)
-    function _assessMateriality(
-        uint160 sqrtPriceBefore,
-        uint160 sqrtPriceAfter,
-        uint128 liquidity
-    ) internal pure returns (bool, uint256 exposure) {
+    // - exposureScore (dimensionless magnitude)
+    function _assessMateriality(uint160 sqrtPriceBefore, uint160 sqrtPriceAfter, uint128 liquidity)
+        internal
+        pure
+        returns (bool, uint256 exposureScore)
+    {
         // Edge case: no price change or no liquidity
         if (sqrtPriceBefore == sqrtPriceAfter || liquidity == 0) {
             return (false, 0);
@@ -231,9 +215,9 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
         // To avoid overflow with uint160², we compute:
         // ratio = sqrtPriceAfter / sqrtPriceBefore (in fixed point)
         // price_change = |ratio² - 1| × 10000
-        
+
         uint256 priceChangeBps;
-        
+
         if (sqrtPriceAfter > sqrtPriceBefore) {
             // Price increased
             // Compute: ((after/before)² - 1) × 10000
@@ -251,16 +235,16 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
         // Normalize liquidity to prevent overflow
         // Divide by 1e18 to bring active liquidity into reasonable magnitude
         uint256 liquidityNormalized = uint256(liquidity) / 1e18;
-        
+
         // If liquidity is tiny (< 1e18), use minimum value of 1
         if (liquidityNormalized == 0) {
             liquidityNormalized = 1;
         }
 
         // Calculate exposure: price_change_bps × liquidity_normalized
-        exposure = priceChangeBps * liquidityNormalized;
+        exposureScore = priceChangeBps * liquidityNormalized;
 
-        return (exposure >= MIN_EXPOSURE_THRESHOLD_BPS, exposure);
+        return (exposureScore >= MIN_EXPOSURE_SCORE, exposureScore);
     }
 
     // Assess whether a swap creates material exposure.
@@ -461,11 +445,7 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     // - Positive value if price increased
     // - Negative value if price decreased
     // - Zero if no change
-    function _calculatePriceChangeBps(uint160 sqrtPriceBefore, uint160 sqrtPriceNow)
-        internal
-        pure
-        returns (int256)
-    {
+    function _calculatePriceChangeBps(uint160 sqrtPriceBefore, uint160 sqrtPriceNow) internal pure returns (int256) {
         if (sqrtPriceBefore == sqrtPriceNow) {
             return 0;
         }

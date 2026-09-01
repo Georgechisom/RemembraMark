@@ -55,7 +55,7 @@ contract EconomicLayerTest is BaseTest {
 
     // Economic constants should be set correctly
     function testEconomicConstants() public view {
-        assertEq(hook.MIN_EXPOSURE_THRESHOLD_BPS(), 10000); // 1%
+        assertEq(hook.MIN_EXPOSURE_SCORE(), 10000); // 1%
         assertEq(hook.OBSERVATION_WINDOW_BLOCKS(), 25);
         assertEq(hook.CONFIRM_THRESHOLD_BPS(), 50); // 0.5%
     }
@@ -64,10 +64,10 @@ contract EconomicLayerTest is BaseTest {
     function testCannotResolveBeforeObservationWindow() public {
         // This test validates the observation window logic without requiring an actual mark
         // since mark creation depends on swap materiality which requires liquidity
-        
+
         // Create a mock mark ID
         bytes32 mockMarkId = keccak256("mock");
-        
+
         // Should return false for nonexistent mark
         assertFalse(hook.canResolveMark(mockMarkId));
     }
@@ -75,7 +75,7 @@ contract EconomicLayerTest is BaseTest {
     // resolveMark should enforce observation window
     function testResolveMarkEnforcesObservationWindow() public {
         bytes32 mockMarkId = keccak256("mock");
-        
+
         // Attempting to resolve non-existent or ineligible mark should fail
         vm.expectRevert();
         hook.resolveMark(mockMarkId);
@@ -84,7 +84,7 @@ contract EconomicLayerTest is BaseTest {
     // Anti-manipulation: cannot resolve nonexistent mark
     function testCannotResolveNonexistentMark() public {
         bytes32 fakeMarkId = keccak256("fake");
-        
+
         // Should revert (not with specific error, but any error)
         vm.expectRevert();
         hook.resolveMark(fakeMarkId);
