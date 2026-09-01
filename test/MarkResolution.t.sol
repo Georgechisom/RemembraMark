@@ -7,8 +7,8 @@ import {MarkTypes} from "../src/libraries/MarkTypes.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 // Concrete implementation for testing mark resolution
-contract TestLedger is ExposureLedger {
-    function testCreateMark(
+contract MarkResolutionLedger is ExposureLedger {
+    function createMarkForTesting(
         PoolId poolId,
         address swapper,
         int24 tickAtMark,
@@ -18,11 +18,11 @@ contract TestLedger is ExposureLedger {
         return createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne);
     }
 
-    function testConfirmMark(bytes32 markId) external {
+    function confirmMarkForTesting(bytes32 markId) external {
         confirmMark(markId);
     }
 
-    function testClearMark(bytes32 markId) external {
+    function clearMarkForTesting(bytes32 markId) external {
         clearMark(markId);
     }
 }
@@ -30,17 +30,17 @@ contract TestLedger is ExposureLedger {
 // Tests mark resolution and state transition logic.
 // Verifies valid and invalid state transitions for exposure marks.
 contract MarkResolutionTest is Test {
-    TestLedger ledger;
+    MarkResolutionLedger ledger;
     PoolId testPoolId;
 
     function setUp() public {
-        ledger = new TestLedger();
+        ledger = new MarkResolutionLedger();
         testPoolId = PoolId.wrap(keccak256("test-pool"));
     }
 
     // Open mark can transition to Confirmed
     function testOpenMarkCanBeConfirmed() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, address(0x1), 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true);
 
         // Verify initial state
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Open));
@@ -49,7 +49,7 @@ contract MarkResolutionTest is Test {
         vm.expectEmit(true, true, false, true);
         emit ExposureLedger.MarkResolved(markId, testPoolId, MarkTypes.MarkStatus.Confirmed, block.number);
 
-        ledger.testConfirmMark(markId);
+        ledger.confirmMarkForTesting(markId);
 
         // Verify final state
         MarkTypes.ExposureMark memory mark = ledger.getMark(markId);
@@ -59,7 +59,7 @@ contract MarkResolutionTest is Test {
 
     // Open mark can transition to Cleared
     function testOpenMarkCanBeCleared() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, address(0x1), 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true);
 
         // Verify initial state
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Open));
@@ -68,7 +68,7 @@ contract MarkResolutionTest is Test {
         vm.expectEmit(true, true, false, true);
         emit ExposureLedger.MarkResolved(markId, testPoolId, MarkTypes.MarkStatus.Cleared, block.number);
 
-        ledger.testClearMark(markId);
+        ledger.clearMarkForTesting(markId);
 
         // Verify final state
         MarkTypes.ExposureMark memory mark = ledger.getMark(markId);
@@ -78,46 +78,46 @@ contract MarkResolutionTest is Test {
 
     // Cannot confirm an already confirmed mark
     function testCannotConfirmConfirmedMark() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, address(0x1), 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true);
 
-        ledger.testConfirmMark(markId);
+        ledger.confirmMarkForTesting(markId);
 
         // Attempt to confirm again should revert
         vm.expectRevert(abi.encodeWithSelector(ExposureLedger.MarkNotOpen.selector, markId));
-        ledger.testConfirmMark(markId);
+        ledger.confirmMarkForTesting(markId);
     }
 
     // Cannot clear an already cleared mark
     function testCannotClearClearedMark() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, address(0x1), 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true);
 
-        ledger.testClearMark(markId);
+        ledger.clearMarkForTesting(markId);
 
         // Attempt to clear again should revert
         vm.expectRevert(abi.encodeWithSelector(ExposureLedger.MarkNotOpen.selector, markId));
-        ledger.testClearMark(markId);
+        ledger.clearMarkForTesting(markId);
     }
 
     // Cannot clear a confirmed mark (no status reversal)
     function testCannotClearConfirmedMark() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, address(0x1), 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true);
 
-        ledger.testConfirmMark(markId);
+        ledger.confirmMarkForTesting(markId);
 
         // Attempt to clear a confirmed mark should revert
         vm.expectRevert(abi.encodeWithSelector(ExposureLedger.MarkNotOpen.selector, markId));
-        ledger.testClearMark(markId);
+        ledger.clearMarkForTesting(markId);
     }
 
     // Cannot confirm a cleared mark (no status reversal)
     function testCannotConfirmClearedMark() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, address(0x1), 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true);
 
-        ledger.testClearMark(markId);
+        ledger.clearMarkForTesting(markId);
 
         // Attempt to confirm a cleared mark should revert
         vm.expectRevert(abi.encodeWithSelector(ExposureLedger.MarkNotOpen.selector, markId));
-        ledger.testConfirmMark(markId);
+        ledger.confirmMarkForTesting(markId);
     }
 
     // Cannot resolve nonexistent mark
@@ -125,12 +125,12 @@ contract MarkResolutionTest is Test {
         bytes32 fakeId = keccak256("fake");
 
         vm.expectRevert(abi.encodeWithSelector(ExposureLedger.MarkNotFound.selector, fakeId));
-        ledger.testConfirmMark(fakeId);
+        ledger.confirmMarkForTesting(fakeId);
     }
 
     // canResolveMark returns false for all marks (placeholder implementation)
     function testCanResolveMarkReturnsFalse() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, address(0x1), 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, address(0x1), 100, 1000, true);
 
         // Current implementation always returns false (economic logic not implemented)
         assertFalse(ledger.canResolveMark(markId));

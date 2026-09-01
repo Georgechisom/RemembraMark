@@ -8,9 +8,9 @@ import {MarkTypes} from "../src/libraries/MarkTypes.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 // Concrete implementation for testing ExposureLedger
-contract TestLedger is ExposureLedger {
+contract ExposureLedgerForTesting is ExposureLedger {
     // Expose internal functions for testing
-    function testCreateMark(
+    function createMarkForTesting(
         PoolId poolId,
         address swapper,
         int24 tickAtMark,
@@ -19,32 +19,24 @@ contract TestLedger is ExposureLedger {
     ) external returns (bytes32) {
         return createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne);
     }
-
-    function testConfirmMark(bytes32 markId) external {
-        confirmMark(markId);
-    }
-
-    function testClearMark(bytes32 markId) external {
-        clearMark(markId);
-    }
 }
 
 // Tests the ExposureLedger's mark storage and lifecycle management.
 // Verifies mark creation, state transitions, and validation logic.
 contract ExposureLedgerTest is Test {
-    TestLedger ledger;
+    ExposureLedgerForTesting ledger;
     PoolId testPoolId;
     address testSwapper;
 
     function setUp() public {
-        ledger = new TestLedger();
+        ledger = new ExposureLedgerForTesting();
         testPoolId = PoolId.wrap(keccak256("test-pool"));
         testSwapper = address(0x1234);
     }
 
     // Should create mark with correct initial state
     function testCreatesMarkWithCorrectState() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, testSwapper, 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true);
 
         MarkTypes.ExposureMark memory mark = ledger.getMark(markId);
         assertEq(PoolId.unwrap(mark.poolId), PoolId.unwrap(testPoolId));
@@ -58,34 +50,24 @@ contract ExposureLedgerTest is Test {
         assertEq(mark.nonce, 0); // First mark has nonce 0
     }
 
-    // Should emit ExposureMarked event on creation
+    // Should emit ExposureMarked event with correct values on creation
     function testEmitsExposureMarkedEvent() public {
+        // Compute the expected markId
+        bytes32 expectedMarkId = MarkTypes.computeMarkId(testPoolId, testSwapper, 100, block.number, 0);
+
         vm.expectEmit(true, true, true, true);
-        emit ExposureLedger.ExposureMarked(
-            bytes32(0), // markId computed internally
-            testPoolId,
-            testSwapper,
-            100,
-            1000,
-            true,
-            block.number,
-            0
-        );
+        emit ExposureLedger.ExposureMarked(expectedMarkId, testPoolId, testSwapper, 100, 1000, true, block.number, 0);
 
-        // Event will be emitted, but markId won't match exactly (computed internally)
-        // We check the event structure is correct
-        vm.recordLogs();
-        ledger.testCreateMark(testPoolId, testSwapper, 100, 1000, true);
+        bytes32 actualMarkId = ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true);
 
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        assertGt(logs.length, 0);
+        assertEq(actualMarkId, expectedMarkId, "Mark ID mismatch");
     }
 
     // Multiple marks should have unique IDs via nonce
     function testCreatesUniqueMarkIds() public {
         // Same parameters in same block should get different IDs via nonce
-        bytes32 markId1 = ledger.testCreateMark(testPoolId, testSwapper, 100, 1000, true);
-        bytes32 markId2 = ledger.testCreateMark(testPoolId, testSwapper, 100, 1000, true);
+        bytes32 markId1 = ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true);
+        bytes32 markId2 = ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true);
 
         assertTrue(markId1 != markId2);
 
@@ -98,7 +80,7 @@ contract ExposureLedgerTest is Test {
 
     // markExists should return true for created marks
     function testMarkExistsReturnsTrueForCreatedMark() public {
-        bytes32 markId = ledger.testCreateMark(testPoolId, testSwapper, 100, 1000, true);
+        bytes32 markId = ledger.createMarkForTesting(testPoolId, testSwapper, 100, 1000, true);
         assertTrue(ledger.markExists(markId));
     }
 

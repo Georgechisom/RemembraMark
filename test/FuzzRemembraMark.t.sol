@@ -6,9 +6,9 @@ import {ExposureLedger} from "../src/ExposureLedger.sol";
 import {MarkTypes} from "../src/libraries/MarkTypes.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
-// Test ledger implementation
-contract TestLedger is ExposureLedger {
-    function testCreateMark(
+// Test ledger implementation for fuzz testing
+contract FuzzTestLedger is ExposureLedger {
+    function createMarkForTesting(
         PoolId poolId,
         address swapper,
         int24 tickAtMark,
@@ -18,11 +18,11 @@ contract TestLedger is ExposureLedger {
         return createMark(poolId, swapper, tickAtMark, swapAmountSpecified, zeroForOne);
     }
 
-    function testConfirmMark(bytes32 markId) external {
+    function confirmMarkForTesting(bytes32 markId) external {
         confirmMark(markId);
     }
 
-    function testClearMark(bytes32 markId) external {
+    function clearMarkForTesting(bytes32 markId) external {
         clearMark(markId);
     }
 }
@@ -30,10 +30,10 @@ contract TestLedger is ExposureLedger {
 // Fuzz tests for RemembraMark protocol invariants.
 // Verifies key properties hold under arbitrary valid inputs.
 contract FuzzRemembraMarkTest is Test {
-    TestLedger ledger;
+    FuzzTestLedger ledger;
 
     function setUp() public {
-        ledger = new TestLedger();
+        ledger = new FuzzTestLedger();
     }
 
     // Property: Mark IDs are always unique via nonce increment
@@ -55,7 +55,7 @@ contract FuzzRemembraMarkTest is Test {
 
         // Create multiple marks with same parameters
         for (uint256 i = 0; i < count; i++) {
-            markIds[i] = ledger.testCreateMark(poolId, swapper, tick, amount, direction);
+            markIds[i] = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
         }
 
         // Verify all IDs are unique
@@ -76,15 +76,15 @@ contract FuzzRemembraMarkTest is Test {
     ) public {
         PoolId poolId = PoolId.wrap(poolIdRaw);
 
-        bytes32 markId = ledger.testCreateMark(poolId, swapper, tick, amount, direction);
-        ledger.testConfirmMark(markId);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
+        ledger.confirmMarkForTesting(markId);
 
         // Verify status is Confirmed
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Confirmed));
 
         // Attempt to clear should revert (no status reversal)
         vm.expectRevert();
-        ledger.testClearMark(markId);
+        ledger.clearMarkForTesting(markId);
 
         // Status should still be Confirmed
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Confirmed));
@@ -100,15 +100,15 @@ contract FuzzRemembraMarkTest is Test {
     ) public {
         PoolId poolId = PoolId.wrap(poolIdRaw);
 
-        bytes32 markId = ledger.testCreateMark(poolId, swapper, tick, amount, direction);
-        ledger.testClearMark(markId);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
+        ledger.clearMarkForTesting(markId);
 
         // Verify status is Cleared
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Cleared));
 
         // Attempt to confirm should revert (no status reversal)
         vm.expectRevert();
-        ledger.testConfirmMark(markId);
+        ledger.confirmMarkForTesting(markId);
 
         // Status should still be Cleared
         assertEq(uint8(ledger.getMarkStatus(markId)), uint8(MarkTypes.MarkStatus.Cleared));
@@ -125,7 +125,7 @@ contract FuzzRemembraMarkTest is Test {
         PoolId poolId = PoolId.wrap(poolIdRaw);
 
         uint256 blockBefore = block.number;
-        bytes32 markId = ledger.testCreateMark(poolId, swapper, tick, amount, direction);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
 
         MarkTypes.ExposureMark memory mark = ledger.getMark(markId);
 
@@ -148,16 +148,16 @@ contract FuzzRemembraMarkTest is Test {
     ) public {
         PoolId poolId = PoolId.wrap(poolIdRaw);
 
-        bytes32 markId = ledger.testCreateMark(poolId, swapper, tick, amount, direction);
+        bytes32 markId = ledger.createMarkForTesting(poolId, swapper, tick, amount, direction);
 
         // Advance block
         vm.roll(block.number + 10);
         uint256 resolutionBlock = block.number;
 
         if (confirmOrClear) {
-            ledger.testConfirmMark(markId);
+            ledger.confirmMarkForTesting(markId);
         } else {
-            ledger.testClearMark(markId);
+            ledger.clearMarkForTesting(markId);
         }
 
         MarkTypes.ExposureMark memory mark = ledger.getMark(markId);
