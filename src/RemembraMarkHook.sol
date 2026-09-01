@@ -15,7 +15,7 @@ import {MarkTypes} from "./libraries/MarkTypes.sol";
 import {IRemembraMark} from "./interfaces/IRemembraMark.sol";
 
 // An exposure-memory hook for Uniswap v4.
-// 
+//
 // CURRENT SCOPE:
 // This implementation observes swaps at the pool level and creates exposure marks
 // based on swap parameters. It does NOT yet attribute exposure to specific liquidity
@@ -139,7 +139,7 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     }
 
     // Assess whether a swap creates material exposure.
-    // 
+    //
     // CURRENT IMPLEMENTATION:
     // Returns false for all swaps. This is intentionally conservative.
     // No marks are created until proper economic criteria are defined.
@@ -164,7 +164,7 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     }
 
     // Resolve a mark to Confirmed or Cleared status.
-    // 
+    //
     // PERMISSIONLESS RESOLUTION WITH ELIGIBILITY CHECK:
     // Anyone can call this function, but resolution only succeeds if the mark
     // meets eligibility criteria defined in canResolveMark().
@@ -229,12 +229,7 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     }
 
     // Check if a mark is eligible for resolution.
-    function canResolveMark(bytes32 markId)
-        public
-        view
-        override(ExposureLedger, IRemembraMark)
-        returns (bool)
-    {
+    function canResolveMark(bytes32 markId) public view override(ExposureLedger, IRemembraMark) returns (bool) {
         return super.canResolveMark(markId);
     }
 }
