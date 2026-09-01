@@ -11,16 +11,17 @@ library MarkTypes {
     // Valid transitions:
     //      Open → Confirmed
     //      Open → Cleared
-    //      
+    //
     //      Invalid transitions:
     //      Confirmed → Open
     //      Confirmed → Cleared
     //      Cleared → Open
     //      Cleared → Confirmed
     enum MarkStatus {
-        Open,      // Mark created, awaiting observation window
+        Open, // Mark created, awaiting observation window
         Confirmed, // Exposure confirmed by subsequent market movement
-        Cleared    // Exposure cleared, no material impact observed
+        Cleared // Exposure cleared, no material impact observed
+
     }
 
     // Core structure for an exposure mark.
@@ -46,7 +47,7 @@ library MarkTypes {
     }
 
     // Generate a deterministic mark identifier.
-    // 
+    //
     // UNIQUENESS GUARANTEE:
     // The combination of (poolId, swapper, tick, blockNumber, nonce) is structurally unique.
     // A nonce is required because the same swapper can perform multiple swaps in the same
@@ -63,13 +64,11 @@ library MarkTypes {
     // - Swap parameters as differentiator: Still allows collision (same params, same block)
     //
     // The nonce approach is clean, gas-efficient, and provides true uniqueness.
-    function computeMarkId(
-        PoolId poolId,
-        address swapper,
-        int24 tick,
-        uint256 blockNumber,
-        uint256 nonce
-    ) internal pure returns (bytes32 markId) {
+    function computeMarkId(PoolId poolId, address swapper, int24 tick, uint256 blockNumber, uint256 nonce)
+        internal
+        pure
+        returns (bytes32 markId)
+    {
         markId = keccak256(abi.encodePacked(poolId, swapper, tick, blockNumber, nonce));
     }
 }

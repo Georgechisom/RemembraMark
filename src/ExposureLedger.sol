@@ -48,15 +48,12 @@ contract ExposureLedger {
 
     // Create a new open exposure mark.
     // Mark ID is deterministically computed from parameters plus unique nonce.
-    function createMark(
-        PoolId poolId,
-        address swapper,
-        int24 tickAtMark,
-        int256 swapAmountSpecified,
-        bool zeroForOne
-    ) internal returns (bytes32 markId) {
+    function createMark(PoolId poolId, address swapper, int24 tickAtMark, int256 swapAmountSpecified, bool zeroForOne)
+        internal
+        returns (bytes32 markId)
+    {
         uint256 nonce = _markNonce++;
-        
+
         markId = MarkTypes.computeMarkId(poolId, swapper, tickAtMark, block.number, nonce);
 
         // Defensive check - should be impossible with monotonic nonce
@@ -80,10 +77,10 @@ contract ExposureLedger {
     }
 
     // Check if a mark is eligible for resolution.
-    // 
+    //
     // PLACEHOLDER: This is where economic resolution conditions will be evaluated.
     // Current implementation returns false for all marks, preventing arbitrary resolution.
-    // 
+    //
     // Future implementation should check:
     // - Observation window has elapsed
     // - Price movement criteria met
@@ -93,17 +90,17 @@ contract ExposureLedger {
     // This separation between eligibility and state transition ensures clean architecture.
     function canResolveMark(bytes32 markId) public view virtual returns (bool eligible) {
         MarkTypes.ExposureMark storage mark = _marks[markId];
-        
+
         // Mark must exist
         if (mark.creationBlock == 0) {
             return false;
         }
-        
+
         // Mark must be in Open status
         if (mark.status != MarkTypes.MarkStatus.Open) {
             return false;
         }
-        
+
         // Task: Add economic resolution conditions here
         // For now, return false to prevent premature/arbitrary resolution
         // This is intentionally conservative - resolution logic must be

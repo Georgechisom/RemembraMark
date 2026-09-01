@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {ExposureLedger} from "../src/ExposureLedger.sol";
 import {MarkTypes} from "../src/libraries/MarkTypes.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
