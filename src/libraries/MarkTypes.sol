@@ -35,7 +35,7 @@ library MarkTypes {
     // swapper The address that initiated the swap creating this mark
     // nonce The hook-local nonce ensuring uniqueness within same block/tick/swapper
     // sqrtPriceAtMark The sqrt price (sqrtPriceX96) when mark was created, for resolution
-    // exposureMagnitude The calculated exposure in basis points (price_change_bps × liquidity_magnitude)
+    // exposureMagnitude Dimensionless exposure metric (basis points); NOT quote-token or USD denominated
     struct ExposureMark {
         PoolId poolId;
         int24 tickAtMark;

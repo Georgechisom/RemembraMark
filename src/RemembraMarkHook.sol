@@ -48,22 +48,26 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
 
-    // ECONOMIC PARAMETERS (V1 Experimental Values)
-    // These are intentionally conservative to validate the core hypothesis before optimization.
+    // ECONOMIC PARAMETERS (V1 EXPERIMENTAL - NOT OPTIMIZED)
+    // These values require empirical validation through testnet deployment.
+    // Do NOT treat as production-ready constants.
     
-    // Minimum exposure threshold for mark creation (in basis points)
-    // 10000 bps = 1% price impact × liquidity magnitude
+    // Minimum exposure threshold for mark creation (dimensionless, in basis points)
+    // 10000 bps = 1% price impact × normalized liquidity magnitude
+    // EXPERIMENTAL: Selected conservatively; requires calibration per pool type
     // Rationale: Focuses tracking on material swaps; prevents noise from tiny trades
     uint256 public constant MIN_EXPOSURE_THRESHOLD_BPS = 10000;
     
     // Observation window for mark resolution (in blocks)
     // 25 blocks ≈ 5 minutes on mainnet (12s block time)
+    // EXPERIMENTAL: Fixed window may be suboptimal for different volatility regimes
     // Rationale: Long enough for external price discovery, short enough for timely resolution
     uint256 public constant OBSERVATION_WINDOW_BLOCKS = 25;
     
-    // Price movement threshold to confirm adverse selection (in basis points)
+    // Price movement threshold to confirm persistent exposure (in basis points)
     // 50 bps = 0.5% price movement against swap direction
-    // Rationale: Above typical noise, below rare volatility; validated against LVR literature
+    // EXPERIMENTAL: Threshold to distinguish signal from noise; requires empirical tuning
+    // Rationale: Above typical noise, below rare volatility; proxy for post-trade exposure
     uint256 public constant CONFIRM_THRESHOLD_BPS = 50;
 
     // Transient storage for capturing pre-swap state
@@ -159,7 +163,8 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
         // Emit observation event (always emitted, regardless of materiality)
         emit SwapObserved(poolId, sender, 0, tickAfter, params.amountSpecified, params.zeroForOne);
 
-        // Check if swap is material enough to create an exposure mark
+        // Get current active liquidity at current price (NOT total liquidity across all ranges)
+        // This is the liquidity available for trading at the current tick
         uint128 liquidity = poolManager.getLiquidity(poolId);
         (bool isMaterial, uint256 exposureMagnitude) = _assessMateriality(
             sqrtPriceBefore,
@@ -184,22 +189,32 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
 
     // Assess whether a swap creates material exposure.
     //
-    // ECONOMIC FORMULA:
-    // exposure_bps = |price_change_bps| × liquidity_normalized
+    // ECONOMIC FORMULA (DIMENSIONLESS):
+    // exposure_magnitude = |price_change_bps| × liquidity_normalized
     // 
     // Where:
     // - price_change_bps = ((sqrtPriceAfter² - sqrtPriceBefore²) / sqrtPriceBefore²) × 10000
-    // - liquidity_normalized = liquidity / 1e18 (to prevent overflow)
+    // - liquidity_normalized = active_liquidity / 1e18 (to prevent overflow)
+    //
+    // UNITS: Dimensionless magnitude in basis points
+    // This is NOT:
+    // - ❌ Quote token denominated
+    // - ❌ USD denominated  
+    // - ❌ Directly convertible to economic loss
+    //
+    // The result serves as a RELATIVE INDICATOR of swap impact on active liquidity.
+    // Future work (V2+) may convert to economic terms using token decimals and price oracles.
     //
     // IMPLEMENTATION NOTES:
     // - Uses safe fixed-point arithmetic to handle uint160 sqrt prices
     // - Converts sqrt price ratio to linear price ratio: (p_after/p_before - 1)
     // - Scales to basis points for threshold comparison
-    // - Normalizes liquidity to prevent uint256 overflow
+    // - Normalizes active liquidity to prevent uint256 overflow
     //
     // RETURNS:
     // - true if exposure >= MIN_EXPOSURE_THRESHOLD_BPS
     // - false otherwise (no mark created)
+    // - exposure magnitude (dimensionless, in basis points)
     function _assessMateriality(
         uint160 sqrtPriceBefore,
         uint160 sqrtPriceAfter,
@@ -234,7 +249,7 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
         }
 
         // Normalize liquidity to prevent overflow
-        // Divide by 1e18 to bring into reasonable magnitude
+        // Divide by 1e18 to bring active liquidity into reasonable magnitude
         uint256 liquidityNormalized = uint256(liquidity) / 1e18;
         
         // If liquidity is tiny (< 1e18), use minimum value of 1
@@ -354,7 +369,7 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     // ECONOMIC RESOLUTION CONDITIONS (V1):
     // 1. Mark must exist and be in Open status
     // 2. Observation window must have elapsed (OBSERVATION_WINDOW_BLOCKS)
-    // 3. Check if price movement indicates adverse selection OR observation window fully expired
+    // 3. Check if price movement may correlate with persistent post-trade exposure
     //
     // CONFIRMATION CRITERIA:
     // - For zeroForOne swap (sold token0): Price INCREASED by > CONFIRM_THRESHOLD_BPS
@@ -362,6 +377,12 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     //
     // CLEARING CRITERIA:
     // - Observation window elapsed AND confirmation criteria NOT met
+    //
+    // INTERPRETATION:
+    // Confirmed marks indicate price moved against swap direction, which may correlate
+    // with adverse selection, informed trading, or persistent post-trade exposure.
+    // Confirmation is a PROXY SIGNAL, not definitive proof of toxic flow or MEV.
+    // False positives (normal volatility) and false negatives (slow adverse selection) are expected.
     //
     // RETURNS:
     // - true if mark is ready for resolution (either confirm or clear)
@@ -397,15 +418,20 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
     // - price_change_bps = ((priceNow/priceAtMark)² - 1) × 10000
     //
     // For zeroForOne swap (sold token0 for token1):
-    // - Adverse if price ROSE (swapper sold before price increased)
+    // - May correlate with exposure if price ROSE (swapper sold before price increased)
     // - Confirm if price_change_bps > CONFIRM_THRESHOLD_BPS
     //
     // For oneForZero swap (bought token0 with token1):
-    // - Adverse if price FELL (swapper bought before price decreased)
+    // - May correlate with exposure if price FELL (swapper bought before price decreased)
     // - Confirm if price_change_bps < -CONFIRM_THRESHOLD_BPS
     //
+    // INTERPRETATION:
+    // This is a PROXY SIGNAL that price moved against the swap direction.
+    // May correlate with adverse selection, informed trading, or persistent post-trade exposure.
+    // NOT definitive proof of toxic flow, MEV, or LP harm.
+    //
     // RETURNS:
-    // - true if price movement indicates adverse selection
+    // - true if price movement may correlate with persistent post-trade exposure
     // - false if price movement is within normal range
     function _shouldConfirmMark(bytes32 markId) internal view returns (bool) {
         MarkTypes.ExposureMark memory mark = getMark(markId);
@@ -416,12 +442,12 @@ contract RemembraMarkHook is BaseHook, ExposureLedger, IRemembraMark {
         // Calculate price change in basis points
         int256 priceChangeBps = _calculatePriceChangeBps(mark.sqrtPriceAtMark, sqrtPriceNow);
 
-        // Check if price moved against swap direction (adverse selection)
+        // Check if price moved against swap direction (may correlate with exposure)
         if (mark.zeroForOne) {
-            // Sold token0 → adverse if price rose
+            // Sold token0 → may correlate with exposure if price rose
             return priceChangeBps > int256(CONFIRM_THRESHOLD_BPS);
         } else {
-            // Bought token0 → adverse if price fell
+            // Bought token0 → may correlate with exposure if price fell
             return priceChangeBps < -int256(CONFIRM_THRESHOLD_BPS);
         }
     }
