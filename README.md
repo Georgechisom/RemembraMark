@@ -4,8 +4,6 @@
 
 RemembraMark is an experimental Uniswap v4 hook that introduces an "economic memory" primitive for concentrated liquidity. Instead of treating material swaps as instantaneously forgotten events, RemembraMark creates **Exposure Marks** that track how swaps interact with pools over time.
 
-Experimental Software: This is a research prototype under active development. Not production ready. Not audited. Testnet only.
-
 ## Overview
 
 Traditional automated market makers treat each swap as an isolated event. Liquidity providers are exposed to adverse selection and toxic flow, but the protocol has no mechanism to distinguish between different types of market participants or remember past interactions.
@@ -407,8 +405,8 @@ script/
 
 ### Prerequisites
 
-- [Foundry](https://book.getfoundry.sh/getting-started/installation) (stable version)
-- Git
+[Foundry](https://book.getfoundry.sh/getting-started/installation) (stable version)
+Git
 
 ### Installation
 
@@ -453,27 +451,27 @@ See the `script/` directory for pool creation, liquidity provision, and swap exe
 
 ### Uniswap v4 Integration
 
-- Uses OpenZeppelin's `BaseHook` implementation
-- Only enables `beforeSwap` and `afterSwap` permissions currently
-- No delta return (no direct swap intervention)
-- No fee override currently implemented
-- Compatible with v4-core state management
+Uses OpenZeppelin's `BaseHook` implementation
+Only enables `beforeSwap` and `afterSwap` permissions currently
+No delta return (no direct swap intervention)
+No fee override currently implemented
+Compatible with v4-core state management
 
 ### Gas Optimization
 
-- Minimal storage writes in critical path
-- Monotonic nonce for uniqueness (single SLOAD/SSTORE)
-- Events over storage where appropriate
-- No unnecessary external calls in callbacks
+Minimal storage writes in critical path
+Monotonic nonce for uniqueness (single SLOAD/SSTORE)
+Events over storage where appropriate
+No unnecessary external calls in callbacks
 
 ### Security Model
 
-- No fund custody
-- No upgradeability (inherits v4 architecture)
-- Explicit error messages for debugging
-- State transition validation prevents corruption
-- No admin privileges for economic behavior
-- Permissionless resolution gated by eligibility logic
+No fund custody
+No upgradeability (inherits v4 architecture)
+Explicit error messages for debugging
+State transition validation prevents corruption
+No admin privileges for economic behavior
+Permissionless resolution gated by eligibility logic
 
 ## Research Questions
 
@@ -482,28 +480,28 @@ The following economic questions remain open for research:
 ### Materiality Assessment
 
 1. **What constitutes a material swap?**
-   - Absolute amount thresholds?
-   - Relative to pool liquidity?
-   - Price impact percentage?
-   - Tick displacement magnitude?
+   Absolute amount thresholds?
+   Relative to pool liquidity?
+   Price impact percentage?
+   Tick displacement magnitude?
 
 2. **How to normalize across pools?**
-   - Different pools have different liquidity profiles
-   - Stablecoin pairs vs. volatile pairs require different criteria
-   - Tick spacing affects sensitivity
+   Different pools have different liquidity profiles
+   Stablecoin pairs vs. volatile pairs require different criteria
+   Tick spacing affects sensitivity
 
 3. **How to prevent gaming?**
-   - Many small swaps to manufacture exposure?
-   - Self-trading to create and resolve marks?
-   - LP position churn to farm benefits?
+   Many small swaps to manufacture exposure?
+   Self-trading to create and resolve marks?
+   LP position churn to farm benefits?
 
 ### Confirmation Logic
 
 4. **What market movement confirms exposure?**
-   - Absolute price change?
-   - Relative to swap size?
-   - Time-weighted price change?
-   - Liquidity-adjusted impact?
+   Absolute price change?
+   Relative to swap size?
+   Time weighted price change?
+   Liquidity-adjusted impact?
 
 5. **What observation window should be used?**
    - Block count?
@@ -511,78 +509,78 @@ The following economic questions remain open for research:
    - Adaptive based on volatility?
 
 6. **How to prevent self-resolution?**
-   - Can swapper trade again to clear their own mark?
-   - Should there be a cooldown period?
-   - Permissionless vs role-based resolution?
+   Can swapper trade again to clear their own mark?
+   Should there be a cooldown period?
+   Permissionless vs role-based resolution?
 
 ### Range-Level Attribution
 
 7. **How to identify affected liquidity ranges?**
-   - Track all positions via liquidity hooks?
-   - Off-chain indexing with on-chain verification?
-   - Integration with Position Manager?
+   Track all positions via liquidity hooks?
+   Off-chain indexing with on-chain verification?
+   Integration with Position Manager?
 
 8. **How to calculate per-range exposure?**
-   - Proportional to liquidity in range?
-   - Based on tick ranges crossed?
-   - Time-weighted exposure?
+   Proportional to liquidity in range?
+   Based on tick ranges crossed?
+   Time-weighted exposure?
 
 ### Economic Settlement
 
 9. **What happens to confirmed exposure?**
-   - Fee rebates for LPs?
-   - Penalty fees for confirmed swappers?
-   - Redistributed to affected liquidity ranges?
+   Fee rebates for LPs?
+   Penalty fees for confirmed swappers?
+   Redistributed to affected liquidity ranges?
 
 10. **How to account for exposure liability?**
 
-- Maximum outstanding exposure limit?
-- Reserve mechanisms?
-- Cross-pool risk accounting?
+Maximum outstanding exposure limit?
+Reserve mechanisms?
+Cross-pool risk accounting?
 
 ## Security Considerations
 
 ⚠️ **This is experimental software under active development.**
 
-- **Not audited** - No professional security review has been conducted
-- **Not production-ready** - Economic model incomplete
-- **Testnet only** - Do not deploy to mainnet with real funds
-- **Research code** - Intended for experimentation and iteration
+**Not audited** - No professional security review has been conducted
+**Not production-ready** - Economic model incomplete
+**Testnet only** - Do not deploy to mainnet with real funds
+**Research code** - Intended for experimentation and iteration
 
 Known limitations:
 
-- Economic parameters are placeholders
-- Resolution logic not finalized
-- Range-level attribution not implemented
-- Gas optimization not complete
-- Edge cases may not be handled
-- No formal verification performed
+Economic parameters are placeholders
+Resolution logic not finalized
+Range level attribution not implemented
+Gas optimization not complete
+Edge cases may not be handled
+No formal verification performed
 
 ## Future Work
 
 ### Short Term (Next Branches)
 
-- Comprehensive test suite (unit, integration, fuzz, invariant)
-- Gas optimization analysis
-- Economic parameter research
-- Empirical data collection from testnet
+Comprehensive test suite (unit, integration, fuzz, invariant)
+Gas optimization analysis
+Economic parameter research
+Empirical data collection from testnet
 
 ### Medium Term
 
-- Materiality assessment implementation
-- Confirmation/clearing criteria implementation
-- Observation window logic
-- Range-level exposure attribution architecture
-- Settlement mechanics design
+Materiality assessment implementation
+Confirmation/clearing criteria implementation
+Observation window logic
+Range-level exposure attribution architecture
+Settlement mechanics design
 
 ### Long Term
 
-- Multi-pool exposure aggregation
-- LP-specific exposure tracking
-- Advanced analytics and reporting
-- Formal verification of state machine
-- Economic parameter governance (if needed)
-- Production deployment preparation
+Multi-pool exposure aggregation
+LP-specific exposure tracking
+Advanced analytics and reporting
+Formal verification of state machine
+Economic parameter governance (if needed)
+Production deployment preparation
 
 ## License
 
