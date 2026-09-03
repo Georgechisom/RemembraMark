@@ -8,6 +8,9 @@ out = "out"
 solc_version = "0.8.30"
 src = "src"
 via_ir = false
+remappings = [
+    "@reactive-network/reactive-lib/=lib/reactive-lib/src/"
+]
 
 [profile.lint]
 exclude_lints = ["screaming-snake-case-immutable", "screaming-snake-case-const"]
