@@ -815,8 +815,6 @@ Liquidity Risk & Value Distribution
 
 The architectural goal is to keep the observation primitive simple while allowing economic mechanisms to evolve independently.
 
-```
-
 ---
 
 # License
@@ -834,4 +832,3 @@ The project is being developed toward production deployment as its economic and 
 Production development is expected to extend the current Exposure Mark primitive into economically meaningful mechanisms including exposure aware fees, liquidity provider compensation, exposure attribution, and realized risk accounting.
 
 The current implementation should therefore be understood as the foundational protocol layer. A professional security audit, economic validation, and additional production hardening will be required before deployment.
-```
