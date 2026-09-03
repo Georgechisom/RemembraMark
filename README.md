@@ -207,18 +207,21 @@ Defines the external interface for interacting with and querying RemembraMark.
 ```text
                  UNISWAP V4
                      │
-                  Swap
+                     ▼
+                    Swap
                      │
                      ▼
-             RemembraMarkHook
+               RemembraMarkHook
                      │
                      ▼
-              ExposureLedger
+               ExposureLedger
                      │
-             Exposure Mark
+                     ▼
+               Exposure Mark
                      │
-              Observation
-                Window
+                     ▼
+               Observation
+                   Window
                      │
           ┌──────────┴──────────┐
           │                     │
@@ -236,9 +239,7 @@ Defines the external interface for interacting with and querying RemembraMark.
           Confirmed       Cleared
 ```
 
-The integrations do not become the source of truth.
-
-**RemembraMark remains the canonical state authority.**
+**RemembraMark is the canonical state authority.**
 
 ---
 
@@ -268,6 +269,7 @@ The circuit binds historical verification to:
 ### Verification Model
 
 ```text
+
 Exposure Mark
      │
      ▼
@@ -292,6 +294,7 @@ BrevisMarkVerifier
      │
      ▼
 RemembraMark validation
+
 ```
 
 ### Uniswap v4 Storage Verification
@@ -352,6 +355,7 @@ Instead of requiring a centralized process to poll the blockchain and trigger el
 ### Flow
 
 ```text
+
 Origin Chain
      │
      │ ExposureMarked
@@ -370,6 +374,7 @@ RemembraMark
      │
      ▼
 Resolution
+
 ```
 
 ### Implementation
@@ -451,18 +456,6 @@ That distinction is important.
 
 A swap that crosses several tick ranges can affect a very different set of liquidity providers from a swap that stays within one range.
 
-### Future Range-Level Direction
-
-A later version could add:
-
-- Liquidity range tracking
-- Tick crossing attribution
-- Position level exposure accounting
-- Position lifecycle indexing
-- Range-specific exposure calculations
-
-The current architecture deliberately keeps those concerns outside the V1 critical path.
-
 ---
 
 # Current Parameters
@@ -485,7 +478,7 @@ These parameters are experimental and are not presented as optimized economic co
 The complete Solidity test suite currently passes:
 
 ```text
-All 52 tests passed
+All tests passed
 0 failed
 0 skipped
 ```
@@ -510,6 +503,7 @@ Live protocol execution is separate from local contract testing and remains an i
 # Repository Structure
 
 ```text
+
 RemembraMark/
 │
 ├── src/
@@ -544,6 +538,7 @@ RemembraMark/
 ├── integration.md
 ├── foundry.toml
 └── README.md
+
 ```
 
 ---
@@ -608,7 +603,7 @@ Possible signals include:
 - Swap size relative to pool liquidity
 - Price impact
 - Tick displacement
-- Volatility-adjusted exposure
+- Volatility adjusted exposure
 
 ## Normalization
 
@@ -665,19 +660,87 @@ These mechanisms are intentionally outside the current V1 scope.
 
 ---
 
-# What RemembraMark Does Not Claim
+# What RemembraMark Claims
 
-RemembraMark does not claim to:
+RemembraMark introduces an economic memory primitive for concentrated liquidity.
 
-- Eliminate MEV
-- Eliminate adverse selection
-- Perfectly identify toxic flow
-- Prove that a trader was informed
-- Guarantee LP protection
-- Replace all existing MEV mitigation techniques
-- Provide a production ready economic settlement mechanism
+It claims that material swaps can be recorded as persistent Exposure Marks and evaluated against subsequent market behavior rather than being treated as isolated events.
 
-The Confirmed state is a **research signal based on subsequent market behavior**.
+The protocol is designed to provide:
+
+- A measurable record of post trade liquidity exposure
+- A time shifted signal for identifying potentially adverse post trade conditions
+- Historical evidence that can be independently verified
+- Automated resolution of exposure observations
+- A foundation for economically differentiating trading conditions based on observed exposure
+
+The long term objective is to turn this exposure signal into an economic mechanism that can improve the alignment between liquidity providers and the activity that consumes their liquidity.
+
+RemembraMark is not limited to analytics. The Exposure Mark is designed as the primitive through which future economic mechanisms can be built.
+
+## Economic Value
+
+RemembraMark is designed to create an economic feedback loop around liquidity exposure.
+
+Today, the protocol records and resolves exposure. As the economic layer matures, confirmed exposure can become an input into mechanisms that improve how value is distributed around liquidity.
+
+Potential economic applications include:
+
+### Exposure aware fees
+
+Trading activity that repeatedly creates significant post trade exposure could be priced differently from ordinary flow.
+
+### LP compensation
+
+A portion of fees associated with confirmed exposure could eventually be directed toward the liquidity that absorbed that risk.
+
+### Exposure based liquidity incentives
+
+Pools and liquidity ranges that consistently absorb high quality flow could receive differentiated incentives.
+
+### Risk aware pool analytics
+
+Exposure Marks can provide a measurable history of how a pool reacts to different trading conditions, enabling more informed liquidity allocation.
+
+### Realized exposure accounting
+
+Future versions can connect observed exposure to realized outcomes and build a more precise accounting model for liquidity-provider risk.
+
+The intended economic loop is:
+
+```text
+
+Swap
+  ↓
+Exposure Mark
+  ↓
+Observation
+  ↓
+Confirmed Exposure
+  ↓
+Economic Attribution
+  ↓
+Value returned to liquidity
+
+```
+
+## Why This Can Matter Economically
+
+Liquidity providers currently earn fees for supplying liquidity, but the economic relationship between fees earned and adverse post trade exposure is difficult to measure directly.
+
+RemembraMark introduces a measurable intermediate layer:
+
+```text
+
+Trading Activity
+      ↓
+Liquidity Exposure
+      ↓
+Observed Market Consequence
+      ↓
+Economic Attribution
+
+```
 
 ---
 
@@ -733,28 +796,26 @@ Do not use the system with funds you cannot afford to lose.
 
 # Future Direction
 
-The longer term direction is to turn the Exposure Mark from an observational primitive into a richer liquidity risk signal.
-
-Potential extensions include:
+RemembraMark is designed to evolve from an exposure observation primitive into an economic coordination layer for liquidity.
 
 ```text
 V1
-Pool level Exposure Memory
-        │
-        ▼
+Exposure Memory
+    ↓
 V2
-Range level Attribution
-        │
-        ▼
+Range-Level Attribution
+    ↓
 V3
-Exposure aware Economics
-        │
-        ▼
+Exposure-Aware Economics
+    ↓
 V4
-Cross pool Liquidity Risk Analytics
+Liquidity Risk & Value Distribution
+
 ```
 
 The architectural goal is to keep the observation primitive simple while allowing economic mechanisms to evolve independently.
+
+```
 
 ---
 
@@ -768,4 +829,9 @@ MIT
 
 RemembraMark is experimental software provided on an "as is" basis without warranties.
 
-The project is intended for research, experimentation, and iteration. It is not intended for production deployment with real funds.
+The project is being developed toward production deployment as its economic and security model matures.
+
+Production development is expected to extend the current Exposure Mark primitive into economically meaningful mechanisms including exposure aware fees, liquidity provider compensation, exposure attribution, and realized risk accounting.
+
+The current implementation should therefore be understood as the foundational protocol layer. A professional security audit, economic validation, and additional production hardening will be required before deployment.
+```
