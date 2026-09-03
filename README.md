@@ -742,8 +742,6 @@ Economic Attribution
 
 ```
 
----
-
 # Current Scope
 
 Implemented:
@@ -773,8 +771,6 @@ Not included in V1:
 - Production deployment infrastructure
 - Formal verification
 
----
-
 # Security and Limitations
 
 RemembraMark is experimental research software.
@@ -791,8 +787,6 @@ Important limitations include:
 - The economic settlement model remains future work
 
 Do not use the system with funds you cannot afford to lose.
-
----
 
 # Future Direction
 
