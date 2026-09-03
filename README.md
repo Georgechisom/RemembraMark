@@ -1,591 +1,771 @@
 # RemembraMark
 
-**Liquidity that remembers.**
+## Liquidity that remembers.
 
-RemembraMark is an experimental Uniswap v4 hook that introduces an "economic memory" primitive for concentrated liquidity. Instead of treating material swaps as instantaneously forgotten events, RemembraMark creates **Exposure Marks** that track how swaps interact with pools over time.
+**RemembraMark** is an experimental Uniswap v4 hook that introduces an economic memory primitive for concentrated liquidity.
 
-## Overview
+Instead of treating a material swap as an isolated event, RemembraMark records an **Exposure Mark** and observes what happens after the trade. The mark remains open during a bounded observation window and can later resolve to **Confirmed** or **Cleared** based on subsequent market behavior.
 
-Traditional automated market makers treat each swap as an isolated event. Liquidity providers are exposed to adverse selection and toxic flow, but the protocol has no mechanism to distinguish between different types of market participants or remember past interactions.
+The result is a new pool level primitive for measuring whether a material trade is followed by price movement in the direction that may indicate persistent post-trade exposure.
 
-RemembraMark implements a stateful observation model where material swaps create **Exposure Marks** that can be confirmed or cleared based on subsequent market behavior. This provides a foundation for tracking price movements that may correlate with persistent post-trade exposure.
+> **RemembraMark does not try to eliminate all MEV. It gives liquidity a memory of material exposure and lets subsequent market behavior determine how that exposure resolves.**
 
-## Problem
+---
 
-Concentrated liquidity providers face systematic losses from:
+## Why RemembraMark?
 
-1. **Adverse selection**: Informed traders extract value through timely swaps
-2. **Toxic flow**: MEV bots and arbitrageurs trade against stale prices
-3. **Information asymmetry**: LP positions cannot distinguish trade quality
+Concentrated liquidity gives capital efficiency, but it also exposes liquidity providers to adverse selection, arbitrage, and other forms of post trade value leakage.
 
-Current AMM designs provide no protocol level mechanism to:
+Most AMM mechanisms focus on what happens **during execution**.
 
-- Identify swaps that create meaningful exposure
-- Track whether that exposure materializes into LP losses
-- Differentiate between benign trading and value extraction
+RemembraMark explores a different question:
 
-## Design Concept
+**What if liquidity could remember a material trade and evaluate the market after the trade?**
 
-RemembraMark introduces a three state lifecycle for tracking exposure:
+That creates a time shifted observation model:
 
+```text
+Material Swap
+     │
+     ▼
+Exposure Mark Created
+     │
+     ▼
+Observation Window
+     │
+     ├───────────────┐
+     ▼               ▼
+ Confirmed         Cleared
 ```
-OPEN → CONFIRMED
-  ↓
-CLEARED
-```
 
-When a materially significant swap occurs, the protocol creates an **Exposure Mark** in the `Open` state. Over an observation window, subsequent market behavior determines whether the exposure:
+This makes post trade behavior measurable without requiring an oracle, centralized monitoring service, or immediate intervention in the swap path.
 
-**Confirms** (price moved against swap direction, may correlate with persistent exposure)
-**Clears** (market conditions normalized, price movement within normal range)
+---
 
-### Exposure Mark Interpretation
+## The Core Primitive: Exposure Mark
 
-Confirmed marks indicate that price moved against the swap direction during the observation window. This price movement **may correlate** with:
+An **Exposure Mark** is a persistent record of material pool level trading activity.
 
-Adverse selection (informed trader front-running price change)
-Persistent post-trade exposure for LPs
-Normal market volatility (false positive)
+Each mark captures:
 
-Confirmation is a **proxy signal**, not definitive proof. The V1 mechanism is designed to:
+- Pool context
+- Price and tick at creation
+- Swap size and direction
+- Swapper address
+- Creation block
+- Observation and resolution information
+- Lifecycle status
+- Deterministic identifier
 
-Test the hypothesis that subsequent price movement can identify certain swap patterns
-Collect empirical data on confirmation rates across different pool types
-Provide a foundation for V2 economic mechanisms (rebates, dynamic fees)
+Mark identifiers use a monotonic nonce to prevent collisions even when the same address performs multiple swaps in the same block and at the same tick.
 
-**V1 does NOT claim to:**
-
-Perfectly identify toxic MEV
-Guarantee LP protection
-Eliminate adverse selection
-Provide definitive proof of informed trading
-
-This primitive enables future development of:
-
-Differentiated fee structures based on exposure patterns
-LP protection mechanisms
-Sophisticated accounting of realized vs. unrealized exposure
-Analytics for trade quality and pool health
-
-## Exposure Marks
-
-An Exposure Mark captures:
-
-**Pool context**: Which pool and price/tick
-**Swap details**: Size, direction, timestamp
-**Lifecycle state**: Open, Confirmed, or Cleared
-**Resolution outcome**: When and how the mark was resolved
-
-Marks use deterministic identifiers with a monotonic nonce:
+Conceptually:
 
 ```solidity
 keccak256(poolId, swapper, tick, blockNumber, nonce)
 ```
 
-The nonce ensures uniqueness even when the same address performs multiple swaps in the same block at the same tick. This prevents collisions without requiring external transaction data.
+The nonce is maintained by the protocol rather than relying on external transaction data.
+
+---
 
 ## Mark Lifecycle
 
+RemembraMark uses a deliberately small state machine:
+
+```text
+OPEN
+  │
+  ├──────────────► CONFIRMED
+  │
+  └──────────────► CLEARED
+```
+
 ### Open
 
-A mark is created when a swap meets materiality criteria. The mark enters observation mode, awaiting future market data.
+A mark is created when a swap satisfies the current experimental materiality criteria.
 
-**Current status**: Materiality criteria not yet implemented. No marks are currently created.
+The mark then enters an observation period.
 
 ### Confirmed
 
-If subsequent market movement indicates the swap may have created persistent exposure, the mark transitions to `Confirmed`.
+A mark becomes Confirmed when subsequent market movement satisfies the experimental confirmation threshold.
 
-**Current status**: Confirmation criteria implemented as experimental V1 parameters (50 bps price movement threshold).
+The current V1 implementation uses a **50 basis point price movement threshold**.
+
+A Confirmed mark is a **proxy signal**. It is not definitive proof of informed trading, toxic flow, or MEV.
 
 ### Cleared
 
-If market conditions normalize without material price movement against swap direction, the mark transitions to `Cleared`.
+A mark becomes Cleared when the observation period completes without satisfying the confirmation condition.
 
-**Current status**: Clearing criteria implemented as experimental V1 parameters (observation window elapsed without confirmation).
+### State Integrity
 
-### Invalid Transitions
+Terminal states cannot be reopened or changed:
 
-The state machine enforces one way transitions:
+```text
+Open → Confirmed
+Open → Cleared
 
-✅ Open → Confirmed
-✅ Open → Cleared
-❌ Confirmed → Open
-❌ Confirmed → Cleared
-❌ Cleared → Open
-❌ Cleared → Confirmed
-
-## Architecture
-
-### Core Components
-
-**`RemembraMarkHook.sol`**  
-Main hook contract integrating with Uniswap v4. Observes swap lifecycle events. Inherits from `BaseHook` and uses only `beforeSwap` and `afterSwap` permissions.
-
-**Important**: Current implementation performs **swap observation** at the pool level. It does NOT yet perform **liquidity exposure attribution** to specific LP ranges or positions.
-
-**`ExposureLedger.sol`**  
-Manages mark storage and state transitions. Enforces lifecycle rules and provides read access to mark data. Includes eligibility checking for mark resolution.
-
-**`MarkTypes.sol`**  
-Core data structures and utilities. Defines `ExposureMark` struct with nonce for uniqueness, `MarkStatus` enum, and deterministic ID computation.
-
-**`IRemembraMark.sol`**  
-External interface for mark queries and protocol interaction.
-
-### Design Principles
-
-1. **Minimal critical-path logic** - Hook callbacks contain only essential operations
-2. **Explicit state transitions** - Invalid state changes revert with clear errors
-3. **Separation of concerns** - Hook integration separated from accounting logic
-4. **No custody** - Protocol never holds user funds
-5. **Deterministic identifiers** - Collision-resistant mark IDs using nonce
-6. **Auditability** - Clean event emission for all state changes
-7. **Modularity** - Economic logic can evolve independently of core architecture
-8. **Permissionless resolution** - Eligibility enforced through economics, not access control
-
-## Integrations
-
-RemembraMark provides integration layers for external verification and automation while remaining the source of truth for mark state.
-
-### Brevis ZK Coprocessor Integration
-
-**Purpose**: Historical price verification using zero knowledge proofs
-
-**Location**: `src/integrations/BrevisMarkVerifier.sol`
-
-Brevis provides cryptographic verification of historical pool state without trust assumptions. The integration enables:
-
-**ZK proof of pool state** at mark creation and resolution
-**Verified price movement** calculation across observation window
-**Off-chain computation** with on-chain verification
-
-**Architecture**:
-
-```
-┌─────────────┐     Request Proof       ┌──────────────┐
-│   Anyone    │ ──────────────────────> │   Brevis     │
-└─────────────┘                         │  Verifier    │
-                                        └──────┬───────┘
-                                               │
-                  ┌────────────────────────────┘
-                  │ Generate ZK Proof:
-                  │ 1. Read pool state at block N (creation)
-                  │ 2. Read pool state at block N+25 (resolution)
-                  │ 3. Compute price change in ZK
-                  │ 4. Output: (markId, priceChangeBps, prices)
-                  │
-                  v
-        ┌─────────────────────┐
-        │  handleProofResult  │
-        │   (callback)        │
-        └──────────┬──────────┘
-                   │
-                   v
-        ┌─────────────────────┐
-        │  RemembraMark Hook  │ <── Still validates eligibility
-        │  resolveMark()      │     and performs state transition
-        └─────────────────────┘
+Confirmed → Open       Not allowed
+Confirmed → Cleared    Not allowed
+Cleared → Open         Not allowed
+Cleared → Confirmed    Not allowed
 ```
 
-**Security Model**:
+---
 
-Cryptographic proof verification (no trust required)
-RemembraMark validates independently regardless of proof
-No arbitrary state forcing
-Proof is advisory, not authoritative
+## What a Confirmed Mark Means
 
-**Files**:
+A Confirmed Mark means that the observed price movement during the defined window met the experimental confirmation condition.
 
-`src/integrations/BrevisMarkVerifier.sol` - Main verifier contract
-`src/integrations/interfaces/IBrevisProof.sol` - Brevis interfaces
+That behavior may be consistent with:
 
-### Reactive Network Integration
+- Adverse selection
+- Persistent post trade exposure
+- Informed flow
+- Ordinary market volatility
 
-**Purpose**: Automated observation window monitoring and resolution triggering
+Therefore:
 
-**Location**: `src/integrations/ReactiveMarkResolver.sol`
+> **Confirmed does not mean “toxic trader proven.”**
 
-Reactive Network provides event driven automation for mark resolution. The integration enables:
+The V1 mechanism is intentionally framed as an **empirical signal**, not a perfect classifier.
 
-**Automatic monitoring** of ExposureMarked events
-**Observation window tracking** (25 blocks)
-**Callback triggering** to RemembraMark.resolveMark()
+The purpose of the primitive is to create measurable data that can later support stronger economic mechanisms.
 
-**Architecture**:
+---
 
+## Design Philosophy
+
+RemembraMark is built around a small number of explicit principles.
+
+### 1. Memory without intervention
+
+The hook records and evaluates exposure rather than changing the execution of a swap.
+
+### 2. Minimal critical path
+
+Hook callbacks perform only the operations required to observe and record activity.
+
+### 3. Canonical state authority
+
+RemembraMark remains the final authority over mark state.
+
+### 4. Deterministic state
+
+Mark identity and lifecycle transitions are deterministic and auditable.
+
+### 5. Permissionless resolution
+
+Resolution is gated by protocol eligibility rules rather than privileged administration.
+
+### 6. No custody
+
+The system does not custody user funds.
+
+### 7. No oracle dependency
+
+The current mechanism does not require an external price oracle.
+
+### 8. Modular verification
+
+Historical verification and automation are separated from the core state machine.
+
+---
+
+# Architecture
+
+## Core Contracts
+
+### `src/RemembraMarkHook.sol`
+
+The main Uniswap v4 hook.
+
+It observes swap activity through the configured `beforeSwap` and `afterSwap` lifecycle callbacks.
+
+The current implementation focuses on **pool level swap observation** rather than assigning exposure to individual LP positions.
+
+### `src/ExposureLedger.sol`
+
+The canonical mark ledger.
+
+It stores Exposure Marks, enforces state transitions, and validates resolution eligibility.
+
+### `src/libraries/MarkTypes.sol`
+
+Defines the core mark data structures, status enum, and deterministic identifier logic.
+
+### `src/interfaces/IRemembraMark.sol`
+
+Defines the external interface for interacting with and querying RemembraMark.
+
+---
+
+# Protocol Flow
+
+```text
+                 UNISWAP V4
+                     │
+                  Swap
+                     │
+                     ▼
+             RemembraMarkHook
+                     │
+                     ▼
+              ExposureLedger
+                     │
+             Exposure Mark
+                     │
+              Observation
+                Window
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+          ▼                     ▼
+       Brevis                Reactive
+   Historical Evidence     Resolution Trigger
+          │                     │
+          └──────────┬──────────┘
+                     ▼
+              RemembraMark
+               State Check
+                     │
+              ┌──────┴──────┐
+              ▼             ▼
+          Confirmed       Cleared
 ```
-Origin Chain                    Reactive Network               Origin Chain
-(e.g., Sepolia)                                               (Callback)
 
-┌──────────────┐                    ┌─────────────────┐
-│ RemembraMark │── ExposureMarked ─>│   Reactive      │
-│    Hook      │                    │   Resolver      │
-└──────────────┘                    └────────┬────────┘
-                                             │
-                                             │ 1. Subscribe to events
-                                             │ 2. Register mark + creation block
-                                             │ 3. Monitor block progression
-                                             │ 4. When block >= creation + 25:
-                                             │
-                                             v
-                                    ┌─────────────────┐
-                                    │  Trigger        │
-                                    │  Resolution     │
-                                    └────────┬────────┘
-                                             │
-                                             v
-                                    ┌──────────────────┐
-                                    │ RemembraMark     │ <── Validates eligibility
-                                    │ resolveMark()    │     before state transition
-                                    └──────────────────┘
+The integrations do not become the source of truth.
+
+**RemembraMark remains the canonical state authority.**
+
+---
+
+# Integrations
+
+## Brevis ZK Coprocessor
+
+### Purpose
+
+Brevis is used to provide historical evidence for price movement during the observation period.
+
+The integration is built around the official Brevis SDK and a custom circuit in:
+
+```text
+brevis-circuits/price_movement.go
 ```
 
-**Security Model**:
+The circuit binds historical verification to:
 
-Callbacks authenticated via `CALLBACK_PROXY_ADDR` (0x...fffFfF)
-RemembraMark validates eligibility regardless of caller
-No arbitrary state forcing
-Permissionless but gated by economic logic
+- `markId`
+- `poolId`
+- PoolManager address
+- Start block
+- End block
+- Historical `sqrtPriceX96`
 
-**Files**:
+### Verification Model
 
-`src/integrations/ReactiveMarkResolver.sol` - Reactive contract (deploy on Reactive Network)
-`src/integrations/interfaces/IReactiveCallback.sol` - Reactive interfaces
-
-### Integration Security Summary
-
-Both integrations follow the same security model:
-
-1. **RemembraMark is the source of truth** - All state transitions validated by core hook
-2. **Non-trusted external systems** - Integrations provide advisory data or automation triggers
-3. **Independent validation** - RemembraMark checks eligibility regardless of caller
-4. **No upgradeability** - Integrations inherit v4's immutable architecture
-5. **No custody** - No funds held by integration contracts
-6. **Cryptographic verification (Brevis)** - ZK proofs provide trustless historical data
-7. **Authenticated callbacks (Reactive)** - System contract validates caller identity
-
-**What integrations DO**:
-
-Brevis: Verify historical price movement via ZK proofs
-Reactive: Monitor observation windows and trigger resolution
-
-**What integrations DO NOT do**:
-
-Force arbitrary state changes
-Override RemembraMark's eligibility logic
-Hold or custody user funds
-Implement economic settlement
-Control fee structures
-
-### Deployment Guide
-
-**Brevis Integration**:
-
-1. Deploy BrevisMarkVerifier on same chain as RemembraMark
-2. Pass Brevis proof verifier address and RemembraMark hook address to constructor
-3. Users call `requestProofForMark(markId)` to initiate ZK proof generation
-4. Brevis calls back `handleProofResult()` with verified data
-5. Use verified data to inform resolution decisions
-
-**Reactive Integration**:
-
-1. Deploy ReactiveMarkResolver on Reactive Network
-2. Pass origin chain ID and RemembraMark hook address to constructor
-3. Contract automatically subscribes to ExposureMarked events
-4. Reactive Network monitors observation windows
-5. Callbacks trigger `resolveMark()` on origin chain when eligible
-
-## Swap Observation vs Liquidity Exposure Attribution
-
-### What Is Currently Implemented: Swap Observation
-
-The current hook observes swaps at the **pool level**:
-
-Which pool was swapped against
-Price/tick before and after
-Swap size and direction
-Swapper address
-
-These observations are sufficient to create exposure marks that represent **pool-level trading activity**.
-
-### What Is NOT Yet Implemented: Liquidity Exposure Attribution
-
-The current implementation does NOT identify:
-
-Which specific liquidity ranges were crossed during the swap
-How much liquidity was utilized in each tick range
-Which individual LP positions were affected
-Per position exposure amounts
-
-### Why This Distinction Matters
-
-True concentrated liquidity exposure tracking requires knowing which LP positions absorbed the swap. A swap that crosses many ticks affects different LPs than a swap contained in a single range.
-
-### Path to Range-Level Attribution
-
-Future development will require:
-
-1. **Additional hook permissions**
-   Track liquidity additions/removals via `beforeAddLiquidity`/`afterAddLiquidity`
-   Build a mapping of active ranges
-
-2. **Position state integration**
-   Query Position Manager for active positions
-   Track position lifecycle
-
-3. **Tick range accounting**
-   Determine which ranges a swap crossed
-   Calculate per-range exposure
-
-4. **Off-chain indexing**
-   Index position events
-   Provide Merkle proofs for on-chain verification
-
-The current architecture provides a clean foundation for this development without requiring a full rewrite.
-
-## Current Implementation Status
-
-This branch (`remembramark-core`) establishes the foundational architecture.
-
-✅ **Implemented:**
-
-Core state model (Open/Confirmed/Cleared)
-Exposure mark data structures with nonce-based uniqueness
-Ledger storage and lifecycle management
-Hook integration with Uniswap v4 (swap observation)
-Event emission for indexing (SwapObserved, ExposureMarked, MarkResolved)
-Deterministic mark identifiers with collision resistance
-State transition validation
-Eligibility checking framework for resolution
-Permissionless resolution with eligibility gates
-
-❌ **Not Implemented (by design):**
-
-Economic materiality thresholds (research phase)
-Confirmation/clearing criteria (research phase)
-Observation window logic (research phase)
-Range-level liquidity exposure attribution (future phase)
-Settlement mechanics (future phase)
-LP rebates or fee adjustments (future phase)
-Governance or admin controls (intentionally avoided)
-Comprehensive testing (separate branch)
-Production deployment infrastructure
-
-**Current behavior**: The hook observes all swaps and emits `SwapObserved` events. Material swaps (exceeding the experimental threshold) create exposure marks. Marks can be resolved after the observation window (25 blocks) to Confirmed or Cleared status based on price movement.
-
-## Repository Structure
-
+```text
+Exposure Mark
+     │
+     ▼
+Proof Request
+     │
+     ▼
+Brevis Circuit
+     │
+     ├── Historical PoolManager storage
+     ├── Storage proofs
+     ├── sqrtPriceX96 extraction
+     └── Price movement calculation
+     │
+     ▼
+ZK Proof
+     │
+     ▼
+Brevis Callback
+     │
+     ▼
+BrevisMarkVerifier
+     │
+     ▼
+RemembraMark validation
 ```
-src/
-├── RemembraMarkHook.sol          # Main hook contract
-├── ExposureLedger.sol            # Mark storage and lifecycle
-├── integrations/                 # External system integrations
-│   ├── BrevisMarkVerifier.sol    # Brevis ZK proof verification
-│   ├── ReactiveMarkResolver.sol  # Reactive Network automation
+
+### Uniswap v4 Storage Verification
+
+The circuit uses the actual Uniswap v4 PoolManager storage layout verified from the installed v4-core source.
+
+The PoolManager stores pool state in:
+
+```solidity
+mapping(PoolId id => Pool.State) internal _pools;
+```
+
+The verified base storage slot is:
+
+```text
+POOLS_SLOT = 6
+```
+
+The pool state slot is derived using:
+
+```solidity
+keccak256(
+    abi.encodePacked(
+        PoolId.unwrap(poolId),
+        bytes32(uint256(6))
+    )
+)
+```
+
+`Pool.State.slot0` is at offset `0`, and the low 160 bits of the packed `Slot0` value contain `sqrtPriceX96`.
+
+This is reflected in the circuit implementation rather than using a simplified pool address proxy.
+
+### Brevis Contract
+
+```text
+src/integrations/BrevisMarkVerifier.sol
+```
+
+The contract uses the Brevis callback pattern, validates the configured request sender, validates the expected verification key hash, and validates the circuit output before exposing the result to RemembraMark.
+
+### Current Status
+
+**Implemented and locally verified.**
+
+Live proof generation and callback execution remain dependent on the required Brevis proving infrastructure.
+
+---
+
+## Reactive Network
+
+### Purpose
+
+Reactive Network provides event driven automation for the RemembraMark observation lifecycle.
+
+Instead of requiring a centralized process to poll the blockchain and trigger eligible marks, the Reactive integration listens for `ExposureMarked` events and schedules the resolution callback.
+
+### Flow
+
+```text
+Origin Chain
+     │
+     │ ExposureMarked
+     ▼
+Reactive Network
+     │
+     ▼
+ReactiveMarkResolver.react(...)
+     │
+     │ observation window reached
+     ▼
+Callback(...)
+     │
+     ▼
+RemembraMark
+     │
+     ▼
+Resolution
+```
+
+### Implementation
+
+```text
+src/integrations/ReactiveMarkResolver.sol
+```
+
+The resolver is implemented against the official Reactive Network library and uses:
+
+- `AbstractReactive`
+- `IReactive`
+- `LogRecord`
+- `ISystemContract`
+- `vmOnly`
+- `rnOnly`
+- Official `Callback` mechanism
+
+The resolver subscribes to the canonical `ExposureMarked` event.
+
+The event topic is derived from the actual event declaration in `src/ExposureLedger.sol`.
+
+### Current Status
+
+**Implemented and locally verified against the installed official Reactive library.**
+
+Live Reactive Network execution remains pending testnet deployment.
+
+---
+
+# Integration Security Model
+
+The integrations helps the RemembraMark core.
+
+## Brevis
+
+Brevis provides historical evidence.
+
+It does not independently control the mark state.
+
+## Reactive
+
+Reactive provides an automation trigger.
+
+It does not determine whether a mark is Confirmed or Cleared.
+
+## RemembraMark
+
+RemembraMark performs the final eligibility checks and state transition.
+
+This separation means external infrastructure cannot:
+
+- Force arbitrary mark states
+- Bypass lifecycle rules
+- Override resolution eligibility
+- Custody protocol funds
+- Change fee structures
+- Introduce an external price oracle into the core mechanism
+
+---
+
+# Swap Observation vs. LP Exposure Attribution
+
+The current implementation is intentionally **pool level**.
+
+It records:
+
+- Pool
+- Tick and price context
+- Swap size
+- Swap direction
+- Swapper
+- Block information
+- Subsequent market movement
+
+It does not yet attribute the exposure to individual concentrated liquidity ranges or positions.
+
+That distinction is important.
+
+A swap that crosses several tick ranges can affect a very different set of liquidity providers from a swap that stays within one range.
+
+### Future Range-Level Direction
+
+A later version could add:
+
+- Liquidity range tracking
+- Tick crossing attribution
+- Position level exposure accounting
+- Position lifecycle indexing
+- Range-specific exposure calculations
+
+The current architecture deliberately keeps those concerns outside the V1 critical path.
+
+---
+
+# Current Parameters
+
+The V1 implementation uses experimental parameters intended for research and calibration.
+
+| Parameter              |                         Current Value |
+| ---------------------- | ------------------------------------: |
+| Observation Window     |                             25 blocks |
+| Confirmation Threshold |                                50 bps |
+| Mark Identifier        | Pool + swap context + monotonic nonce |
+| Resolution             |     Permissionless, eligibility gated |
+
+These parameters are experimental and are not presented as optimized economic constants.
+
+---
+
+# Testing
+
+The complete Solidity test suite currently passes:
+
+```text
+All 52 tests passed
+0 failed
+0 skipped
+```
+
+The suite covers the core hook, mark identity, lifecycle transitions, economic logic, swaps, and integration contracts.
+
+Integration coverage includes:
+
+```text
+BrevisVerifierTest
+ReactiveResolverTest
+```
+
+The local build completes successfully with the project's Solidity compiler configuration.
+
+The Brevis circuit dependencies have also been verified through the Go module configuration.
+
+Live protocol execution is separate from local contract testing and remains an infrastructure dependent step.
+
+---
+
+# Repository Structure
+
+```text
+RemembraMark/
+│
+├── src/
+│   ├── RemembraMarkHook.sol
+│   ├── ExposureLedger.sol
+│   ├── integrations/
+│   │   ├── BrevisMarkVerifier.sol
+│   │   └── ReactiveMarkResolver.sol
+│   ├── libraries/
+│   │   └── MarkTypes.sol
 │   └── interfaces/
-│       ├── IBrevisProof.sol      # Brevis interfaces
-│       └── IReactiveCallback.sol # Reactive interfaces
-├── libraries/
-│   └── MarkTypes.sol             # Core data types
-└── interfaces/
-    └── IRemembraMark.sol         # External interface
-
-test/
-├── integrations/                 # Integration tests
-│   ├── BrevisVerifier.t.sol      # Brevis verifier tests
-│   └── ReactiveResolver.t.sol    # Reactive resolver tests
-└── utils/                        # Testing infrastructure (from template)
-
-script/
-└── base/                         # Deployment helpers (from template)
+│       └── IRemembraMark.sol
+│
+├── brevis-circuits/
+│   ├── price_movement.go
+│   ├── main.go
+│   ├── go.mod
+│   └── README.md
+│
+├── test/
+│   ├── integrations/
+│   │   ├── BrevisVerifier.t.sol
+│   │   └── ReactiveResolver.t.sol
+│   └── ...
+│
+├── lib/
+│   ├── brevis-sdk/
+│   └── reactive-lib/
+│
+├── script/
+│
+├── integration.md
+├── foundry.toml
+└── README.md
 ```
 
-## Development Setup
+---
 
-### Prerequisites
+# Development
 
-[Foundry](https://book.getfoundry.sh/getting-started/installation) (stable version)
-Git
+## Requirements
 
-### Installation
+- Foundry
+- Git
+- Go 1.21 or newer for Brevis circuit work
+
+## Install
 
 ```bash
-git clone <repository-url>
-cd remembramark
+git clone https://github.com/Georgechisom/RemembraMark.git
+cd RemembraMark
 forge install
 ```
 
-### Build
+## Build
 
 ```bash
 forge build
 ```
 
-### Testing
-
-Comprehensive testing will be performed on a separate branch.
+## Test
 
 ```bash
 forge test
 ```
 
-## Local Development
+Expected local result:
 
-The repository includes scripts for local testing with Anvil:
-
-```bash
-# Start local node
-anvil
-
-# Deploy hook (in separate terminal)
-forge script script/00_DeployHook.s.sol \
-    --rpc-url http://localhost:8545 \
-    --private-key <PRIVATE_KEY> \
-    --broadcast
+```text
+All 52 tests passed
 ```
 
-See the `script/` directory for pool creation, liquidity provision, and swap execution examples.
+## Local Anvil Development
 
-## Design Constraints
+Start Anvil:
 
-### Uniswap v4 Integration
+```bash
+anvil
+```
 
-Uses OpenZeppelin's `BaseHook` implementation
-Only enables `beforeSwap` and `afterSwap` permissions currently
-No delta return (no direct swap intervention)
-No fee override currently implemented
-Compatible with v4-core state management
+Then use the deployment and interaction scripts in `script/` for local pool creation, liquidity setup, swaps, and hook testing.
 
-### Gas Optimization
+---
 
-Minimal storage writes in critical path
-Monotonic nonce for uniqueness (single SLOAD/SSTORE)
-Events over storage where appropriate
-No unnecessary external calls in callbacks
+# Research Questions
 
-### Security Model
+RemembraMark is intentionally presented as an experimental economic primitive. Several research questions remain open.
 
-No fund custody
-No upgradeability (inherits v4 architecture)
-Explicit error messages for debugging
-State transition validation prevents corruption
-No admin privileges for economic behavior
-Permissionless resolution gated by eligibility logic
+## Materiality
 
-## Research Questions
+What should make a swap materially significant?
 
-The following economic questions remain open for research:
+Possible signals include:
 
-### Materiality Assessment
+- Absolute swap size
+- Swap size relative to pool liquidity
+- Price impact
+- Tick displacement
+- Volatility-adjusted exposure
 
-1. **What constitutes a material swap?**
-   Absolute amount thresholds?
-   Relative to pool liquidity?
-   Price impact percentage?
-   Tick displacement magnitude?
+## Normalization
 
-2. **How to normalize across pools?**
-   Different pools have different liquidity profiles
-   Stablecoin pairs vs. volatile pairs require different criteria
-   Tick spacing affects sensitivity
+How should exposure be normalized across:
 
-3. **How to prevent gaming?**
-   Many small swaps to manufacture exposure?
-   Self-trading to create and resolve marks?
-   LP position churn to farm benefits?
+- Stablecoin pools
+- Volatile pairs
+- Different liquidity profiles
+- Different tick spacings
 
-### Confirmation Logic
+## Confirmation
 
-4. **What market movement confirms exposure?**
-   Absolute price change?
-   Relative to swap size?
-   Time weighted price change?
-   Liquidity-adjusted impact?
+What post trade behavior is the strongest signal of persistent exposure?
 
-5. **What observation window should be used?**
-   - Block count?
-   - Time-based (requires oracle)?
-   - Adaptive based on volatility?
+Possible approaches include:
 
-6. **How to prevent self-resolution?**
-   Can swapper trade again to clear their own mark?
-   Should there be a cooldown period?
-   Permissionless vs role-based resolution?
+- Absolute price movement
+- Movement relative to swap size
+- Volatility adjusted movement
+- Time-weighted movement
+- Liquidity adjusted measures
 
-### Range-Level Attribution
+## Manipulation Resistance
 
-7. **How to identify affected liquidity ranges?**
-   Track all positions via liquidity hooks?
-   Off-chain indexing with on-chain verification?
-   Integration with Position Manager?
+How should the protocol handle:
 
-8. **How to calculate per-range exposure?**
-   Proportional to liquidity in range?
-   Based on tick ranges crossed?
-   Time-weighted exposure?
+- Repeated small swaps
+- Self trading
+- Manufactured marks
+- Resolution manipulation
+- Liquidity position churn
 
-### Economic Settlement
+## Range Attribution
 
-9. **What happens to confirmed exposure?**
-   Fee rebates for LPs?
-   Penalty fees for confirmed swappers?
-   Redistributed to affected liquidity ranges?
+How should a pool level mark eventually map to:
 
-10. **How to account for exposure liability?**
+- Tick ranges
+- Individual liquidity providers
+- Position-level exposure
+- Realized and unrealized exposure
 
-Maximum outstanding exposure limit?
-Reserve mechanisms?
-Cross-pool risk accounting?
+## Economic Settlement
 
-## Security Considerations
+Once the signal is sufficiently validated, what should happen economically?
 
-⚠️ **This is experimental software under active development.**
+Potential directions include:
 
-**Not audited** - No professional security review has been conducted
-**Not production-ready** - Economic model incomplete
-**Testnet only** - Do not deploy to mainnet with real funds
-**Research code** - Intended for experimentation and iteration
+- LP rebates
+- Exposure aware fees
+- Liability accounting
+- Range specific redistribution
 
-Known limitations:
+These mechanisms are intentionally outside the current V1 scope.
 
-Economic parameters are placeholders
-Resolution logic not finalized
-Range level attribution not implemented
-Gas optimization not complete
-Edge cases may not be handled
-No formal verification performed
+---
 
-## Future Work
+# What RemembraMark Does Not Claim
 
-### Short Term (Next Branches)
+RemembraMark does not claim to:
 
-Comprehensive test suite (unit, integration, fuzz, invariant)
-Gas optimization analysis
-Economic parameter research
-Empirical data collection from testnet
+- Eliminate MEV
+- Eliminate adverse selection
+- Perfectly identify toxic flow
+- Prove that a trader was informed
+- Guarantee LP protection
+- Replace all existing MEV mitigation techniques
+- Provide a production ready economic settlement mechanism
 
-### Medium Term
+The Confirmed state is a **research signal based on subsequent market behavior**.
 
-Materiality assessment implementation
-Confirmation/clearing criteria implementation
-Observation window logic
-Range-level exposure attribution architecture
-Settlement mechanics design
+---
 
-### Long Term
+# Current Scope
 
-Multi-pool exposure aggregation
-LP-specific exposure tracking
-Advanced analytics and reporting
-Formal verification of state machine
-Economic parameter governance (if needed)
-Production deployment preparation
+Implemented:
 
-## License
+- Uniswap v4 hook integration
+- Exposure Mark data model
+- Deterministic mark identifiers
+- Monotonic nonce-based uniqueness
+- Open, Confirmed, and Cleared lifecycle
+- Resolution eligibility checks
+- Permissionless resolution
+- ExposureMarked event stream
+- Brevis integration layer
+- Brevis historical price-movement circuit
+- Reactive Network integration layer
+- Integration tests
+- Comprehensive Solidity test suite
+
+Not included in V1:
+
+- Individual LP range attribution
+- LP-specific settlement
+- Rebate distribution
+- Dynamic fee adjustment
+- Oracle-based resolution
+- Administrative or emergency resolution
+- Production deployment infrastructure
+- Formal verification
+
+---
+
+# Security and Limitations
+
+RemembraMark is experimental research software.
+
+It has not undergone a professional security audit and should not be treated as production ready financial infrastructure.
+
+Important limitations include:
+
+- Economic parameters remain experimental
+- Range level exposure attribution is not implemented
+- Live Brevis proving has not been demonstrated in the current development environment
+- Live Reactive Network execution has not been demonstrated in the current development environment
+- No formal verification has been performed
+- The economic settlement model remains future work
+
+Do not use the system with funds you cannot afford to lose.
+
+---
+
+# Future Direction
+
+The longer term direction is to turn the Exposure Mark from an observational primitive into a richer liquidity risk signal.
+
+Potential extensions include:
+
+```text
+V1
+Pool level Exposure Memory
+        │
+        ▼
+V2
+Range level Attribution
+        │
+        ▼
+V3
+Exposure aware Economics
+        │
+        ▼
+V4
+Cross pool Liquidity Risk Analytics
+```
+
+The architectural goal is to keep the observation primitive simple while allowing economic mechanisms to evolve independently.
+
+---
+
+# License
 
 MIT
 
-## Disclaimer
+---
 
-RemembraMark is experimental software provided "as is" without warranties. Use at your own risk. The protocol is under active research and development. Not intended for production use.
+# Disclaimer
+
+RemembraMark is experimental software provided on an "as is" basis without warranties.
+
+The project is intended for research, experimentation, and iteration. It is not intended for production deployment with real funds.

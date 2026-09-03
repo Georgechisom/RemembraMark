@@ -3,36 +3,46 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {BrevisMarkVerifier} from "../../src/integrations/BrevisMarkVerifier.sol";
-import {IBrevisProof, IBrevisCallback} from "../../src/integrations/interfaces/IBrevisProof.sol";
 import {IRemembraMark} from "../../src/interfaces/IRemembraMark.sol";
 import {MarkTypes} from "../../src/libraries/MarkTypes.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
-// BrevisVerifier Tests
-// Tests for BrevisMarkVerifier ZK proof integration
+// BrevisVerifierTest
+// Tests for real Brevis ZK coprocessor integration
+// Verified against brevis-sdk commit ab14482
+ 
+// Pattern: BrevisApp.brevisCallback(bytes32 _appVkHash, bytes calldata _appCircuitOutput)
+// NOT: handleBrevisCallback(bytes32 _requestId, ...)
+
 contract BrevisVerifierTest is Test {
     BrevisMarkVerifier public verifier;
-    MockBrevisProof public mockBrevis;
     MockRemembraMark public mockHook;
+    address public mockBrevisRequest;
 
-    address public constant ALICE = address(0xA11CE);
+    bytes32 public constant CIRCUIT_VK_HASH = bytes32(uint256(0x1234)); // Placeholder vkHash
     bytes32 public constant MOCK_MARK_ID = keccak256("mock_mark_id");
+    address public constant ALICE = address(0xA11CE);
 
     function setUp() public {
-        mockBrevis = new MockBrevisProof();
+        mockBrevisRequest = address(0xBEEF);
         mockHook = new MockRemembraMark();
-        verifier = new BrevisMarkVerifier(address(mockBrevis), address(mockHook));
+        
+        verifier = new BrevisMarkVerifier(
+            mockBrevisRequest,
+            address(mockHook),
+            CIRCUIT_VK_HASH
+        );
 
-        // Setup mock mark in hook
+        // Setup mock mark
         mockHook.setMockMark(
             MOCK_MARK_ID,
             MarkTypes.ExposureMark({
-                poolId: PoolId.wrap(bytes32(0)),
+                poolId: PoolId.wrap(bytes32(uint256(0x1))),
                 tickAtMark: 0,
                 creationBlock: 100,
                 resolutionBlock: 0,
                 swapAmountSpecified: 1 ether,
-                zeroForOne: true,
+                zeroForOne: true,  // Sold token0
                 status: MarkTypes.MarkStatus.Open,
                 swapper: ALICE,
                 nonce: 1,
@@ -42,42 +52,80 @@ contract BrevisVerifierTest is Test {
         );
     }
 
-    // Test proof request creation
-    function test_RequestProofForMark() public {
-        vm.prank(ALICE);
-        bytes32 requestId = verifier.requestProofForMark(MOCK_MARK_ID);
+    function test_BrevisCallbackConfirmed() public {
+        int256 priceMovementBps = 100;
+        uint160 sqrtPriceStart = uint160(1e18);
+        uint160 sqrtPriceEnd = uint160(1.005e18);
 
-        assertNotEq(requestId, bytes32(0), "Request ID should not be zero");
-        assertEq(verifier.markToRequest(MOCK_MARK_ID), requestId, "Mark should map to request");
-        assertEq(verifier.requestToMark(requestId), MOCK_MARK_ID, "Request should map to mark");
+        bytes memory circuitOutput = abi.encode(
+            MOCK_MARK_ID,
+            priceMovementBps,
+            sqrtPriceStart,
+            sqrtPriceEnd
+        );
+
+        vm.expectEmit(true, false, false, true);
+        emit BrevisMarkVerifier.ProofVerified(MOCK_MARK_ID, priceMovementBps, true);
+
+        vm.prank(mockBrevisRequest);
+        verifier.brevisCallback(CIRCUIT_VK_HASH, circuitOutput);
+
+        (bool verified, int256 storedMovement, bool meetsThreshold) = verifier.getVerificationResult(MOCK_MARK_ID);
+        assertTrue(verified);
+        assertEq(storedMovement, priceMovementBps);
+        assertTrue(meetsThreshold);
     }
 
-    // Test proof verification callback with confirmed outcome
-    function test_HandleProofResult_Confirmed() public {
-        // Request proof
+    function test_BrevisCallbackCleared() public {
+        int256 priceMovementBps = 30;
+        bytes memory circuitOutput = abi.encode(
+            MOCK_MARK_ID,
+            priceMovementBps,
+            uint160(1e18),
+            uint160(1.003e18)
+        );
+
+        vm.expectEmit(true, false, false, true);
+        emit BrevisMarkVerifier.ProofVerified(MOCK_MARK_ID, priceMovementBps, false);
+
+        vm.prank(mockBrevisRequest);
+        verifier.brevisCallback(CIRCUIT_VK_HASH, circuitOutput);
+
+        (bool verified, int256 storedMovement, bool meetsThreshold) = verifier.getVerificationResult(MOCK_MARK_ID);
+        assertTrue(verified);
+        assertEq(storedMovement, priceMovementBps);
+        assertFalse(meetsThreshold);
+    }
+
+    function test_RevertUnauthorizedCallback() public {
+        bytes memory circuitOutput = abi.encode(MOCK_MARK_ID, int256(100), uint160(1e18), uint160(1.005e18));
+
         vm.prank(ALICE);
-        bytes32 requestId = verifier.requestProofForMark(MOCK_MARK_ID);
+        vm.expectRevert(BrevisMarkVerifier.UnauthorizedCaller.selector);
+        verifier.brevisCallback(CIRCUIT_VK_HASH, circuitOutput);
+    }
 
-        // Simulate Brevis callback with proof that price rose (should confirm for zeroForOne)
-        int256 priceChangeBps = 100; // 1% increase (> 50 bps threshold)
-        bytes memory output = abi.encode(MOCK_MARK_ID, priceChangeBps, uint160(1e18), uint160(1.01e18));
+    function test_RevertInvalidVkHash() public {
+        bytes32 wrongVkHash = bytes32(uint256(0x5678));
+        bytes memory circuitOutput = abi.encode(MOCK_MARK_ID, int256(100), uint160(1e18), uint160(1.005e18));
 
-        vm.expectEmit(true, true, false, true);
-        emit BrevisMarkVerifier.ProofVerified(requestId, MOCK_MARK_ID, true, 100);
+        vm.prank(mockBrevisRequest);
+        vm.expectRevert(BrevisMarkVerifier.InvalidVkHash.selector);
+        verifier.brevisCallback(wrongVkHash, circuitOutput);
+    }
 
-        vm.prank(address(mockBrevis));
-        verifier.handleProofResult(requestId, output);
+    function test_RevertAlreadyVerified() public {
+        bytes memory circuitOutput = abi.encode(MOCK_MARK_ID, int256(100), uint160(1e18), uint160(1.005e18));
+
+        vm.prank(mockBrevisRequest);
+        verifier.brevisCallback(CIRCUIT_VK_HASH, circuitOutput);
+
+        vm.prank(mockBrevisRequest);
+        vm.expectRevert(BrevisMarkVerifier.MarkAlreadyVerified.selector);
+        verifier.brevisCallback(CIRCUIT_VK_HASH, circuitOutput);
     }
 }
 
-// Mock Brevis proof contract
-contract MockBrevisProof {
-    function verifyProof(IBrevisProof.ProofData calldata, bytes calldata) external pure returns (bool) {
-        return true;
-    }
-}
-
-// Mock RemembraMark hook
 contract MockRemembraMark is IRemembraMark {
     mapping(bytes32 => MarkTypes.ExposureMark) private marks;
 

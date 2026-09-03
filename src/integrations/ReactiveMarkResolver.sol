@@ -1,37 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IReactiveSystem, IReactive, IReactiveCallback} from "./interfaces/IReactiveCallback.sol";
+import {AbstractReactive} from "@reactive-network/reactive-lib/abstract-base/AbstractReactive.sol";
+import {IReactive} from "@reactive-network/reactive-lib/interfaces/IReactive.sol";
 import {IRemembraMark} from "../interfaces/IRemembraMark.sol";
 
-// ReactiveMarkResolver
-// Automates observation window monitoring and resolution triggering for RemembraMark
-// This contract is deployed on Reactive Network and monitors ExposureMarked events.
-//   When the observation window elapses, it triggers a callback to resolve the mark.
-//   RemembraMark validates eligibility and performs state transition.
 
-
-// ARCHITECTURE:
-// 1. Deploy on Reactive Network
-// 2. Subscribe to ExposureMarked events from RemembraMark hook
-// 3. Monitor block numbers via CRON events
-// 4. Trigger callback to RemembraMark.resolveMark() when window elapses
-
-
-// SECURITY:
-// Callbacks authenticated via CALLBACK_PROXY_ADDR (Reactive system contract)
-// RemembraMark validates eligibility regardless of caller
-// No arbitrary state forcing
-// Permissionless but gated by RemembraMark's economic logic
-contract ReactiveMarkResolver is IReactive {
-    // Reactive Network system contract address
-    // Standard address: 0x0000000000000000000000000000000000fffFfF
-    address private constant REACTIVE_SYSTEM = 0x0000000000000000000000000000000000fffFfF;
-
-    // Reactive callback proxy address (same as system contract)
-    address private constant CALLBACK_PROXY = 0x0000000000000000000000000000000000fffFfF;
-
-    // Chain ID where RemembraMark is deployed (e.g., Sepolia = 11155111)
+ // ReactiveMarkResolver
+ // Reactive Network automation for RemembraMark observation window monitoring
+ // Implements the official reactive-lib AbstractReactive pattern
+ 
+ // ARCHITECTURE:
+ // Deployed on Reactive Network (dual deployment: RNK + ReactVM)
+ // Subscribes to ExposureMarked events from RemembraMark on origin chain
+ // When observation window elapses, emits Callback to trigger resolution
+ // RemembraMark remains the canonical authority for all state transitions
+ 
+ // SECURITY:
+ // Non-authoritative: Cannot force Confirmed/Cleared state
+ // RemembraMark validates ALL eligibility criteria independently
+ // Callback authentication handled by Reactive Network callback proxy
+ 
+contract ReactiveMarkResolver is AbstractReactive {
+    // Origin chain ID where RemembraMark is deployed
     uint256 public immutable originChainId;
 
     // Address of RemembraMark hook on origin chain
@@ -40,160 +31,118 @@ contract ReactiveMarkResolver is IReactive {
     // Observation window in blocks (matches RemembraMark.OBSERVATION_WINDOW_BLOCKS)
     uint256 public constant OBSERVATION_WINDOW_BLOCKS = 25;
 
-    // ExposureMarked event signature
-    // keccak256("ExposureMarked(bytes32,bytes32,address,int24,int256,bool,uint256,uint256,uint160,uint256)")
-    uint256 private constant EXPOSURE_MARKED_TOPIC = 0xd9e8c5b8c5b5e5b5e5b5e5b5e5b5e5b5e5b5e5b5e5b5e5b5e5b5e5b5e5b5e5b5;
+    // ExposureMarked event topic0: keccak256("ExposureMarked(bytes32,bytes32,address,int24,int256,bool,uint256,uint256,uint160,uint256)")
+    uint256 private constant EXPOSURE_MARKED_TOPIC = 0x2c0d511f412c7d04214f7530f3d8b79fdbaca88062748d1debb97ee55750e560;
 
     // Mapping from mark ID to creation block number
     mapping(bytes32 => uint256) public markCreationBlocks;
 
-    // Mapping from mark ID to whether resolution was triggered
-    mapping(bytes32 => bool) public resolutionTriggered;
-
     // Emitted when a mark is registered for monitoring
-    event MarkRegistered(bytes32 indexed markId, uint256 creationBlock, uint256 triggerBlock);
+    event MarkRegistered(bytes32 indexed markId, uint256 creationBlock, uint256 targetBlock);
 
-    // Emitted when resolution is triggered
-    event ResolutionTriggered(bytes32 indexed markId, uint256 blockNumber);
+    // Emitted when resolution callback is triggered
+    event ResolutionCallbackTriggered(bytes32 indexed markId, uint256 blockNumber);
 
-    // Unauthorized caller
-    error Unauthorized();
-
-    // Mark already being monitored
-    error MarkAlreadyRegistered(bytes32 markId);
-
-    // _originChainId Chain ID where RemembraMark is deployed
-    // _remembraMarkHook Address of RemembraMark hook
+    
+    // _originChainId Chain ID where RemembraMark is deployed (e.g., Base = 8453)
+    // _remembraMarkHook Address of RemembraMark hook contract
     constructor(uint256 _originChainId, address _remembraMarkHook) {
         originChainId = _originChainId;
         remembraMarkHook = _remembraMarkHook;
 
-        // Subscribe to ExposureMarked events from RemembraMark
-        // This only works when deployed on Reactive Network
-        // In ReactVM (testing), system contract doesn't exist
-        if (address(REACTIVE_SYSTEM).code.length > 0) {
-            IReactiveSystem(REACTIVE_SYSTEM).subscribe(
+        // Subscribe to ExposureMarked events (only on Reactive Network deployment, not ReactVM)
+        if (!vm) {
+            service.subscribe(
                 _originChainId,
                 _remembraMarkHook,
                 EXPOSURE_MARKED_TOPIC,
-                0, // topic1: wildcard (markId)
-                0, // topic2: wildcard (poolId)
-                0 // topic3: wildcard (swapper)
+                REACTIVE_IGNORE, // topic1: markId (any)
+                REACTIVE_IGNORE, // topic2: poolId (any)
+                REACTIVE_IGNORE // topic3: swapper (any)
             );
         }
     }
 
-    // React to ExposureMarked events and trigger resolution when window elapses
-    // Called by Reactive Network when subscribed event occurs
-    function react(
-        uint256 chainId,
-        address _contract,
-        uint256 topic0,
-        uint256 topic1,
-        uint256 topic2,
-        uint256 topic3,
-        bytes calldata data,
-        uint256 blockNumber,
-        bytes32 txHash
-    ) external override {
-        // Verify caller is Reactive system
-        if (msg.sender != REACTIVE_SYSTEM) {
-            revert Unauthorized();
-        }
-
-        // Verify event is from correct chain and contract
-        if (chainId != originChainId || _contract != remembraMarkHook) {
+    
+    // React to ExposureMarked events and trigger resolution when observation window elapses
+    // Called by Reactive Network system contract when subscribed event occurs
+    // Only runs in ReactVM (vmOnly modifier)
+    function react(LogRecord calldata log) external override vmOnly {
+        // Verify this is an ExposureMarked event from our target contract
+        if (log.chain_id != originChainId || log._contract != remembraMarkHook) {
             return;
         }
 
-        // Verify event signature
-        if (topic0 != EXPOSURE_MARKED_TOPIC) {
+        if (log.topic_0 != EXPOSURE_MARKED_TOPIC) {
             return;
         }
 
         // Extract markId from topic1 (first indexed parameter)
-        bytes32 markId = bytes32(topic1);
+        bytes32 markId = bytes32(log.topic_1);
 
         // Register mark for monitoring
-        _registerMark(markId, blockNumber);
-    }
-
-    // Register a mark for observation window monitoring
-    // markId The exposure mark identifier
-    // creationBlock Block number when mark was created
-    function _registerMark(bytes32 markId, uint256 creationBlock) internal {
-        // Check if already registered
-        if (markCreationBlocks[markId] != 0) {
-            revert MarkAlreadyRegistered(markId);
-        }
-
+        uint256 creationBlock = log.block_number;
         markCreationBlocks[markId] = creationBlock;
 
-        uint256 triggerBlock = creationBlock + OBSERVATION_WINDOW_BLOCKS;
+        uint256 targetBlock = creationBlock + OBSERVATION_WINDOW_BLOCKS;
+        emit MarkRegistered(markId, creationBlock, targetBlock);
 
-        emit MarkRegistered(markId, creationBlock, triggerBlock);
+        // Check if observation window has already elapsed
+        // Note: Reactive Network delivers events with block context
+        // We trigger callback immediately if window elapsed, or wait for next delivery
+        if (log.block_number >= targetBlock) {
+            _triggerResolutionCallback(markId);
+        }
 
-        // In production, would schedule callback for triggerBlock
-        // Reactive Network's CRON mechanism or block monitoring would handle this
-        // For now, external callers can use checkAndTriggerResolution()
+        // Note: For marks where observation window hasn't elapsed yet,
+        // this contract relies on Reactive Network's event re-delivery mechanism
+        // or can be enhanced with CRON subscription for periodic checks
     }
 
-    // Check if mark is ready for resolution and trigger if so
-    // Can be called by anyone (permissionless)
-    // markId The exposure mark identifier
-    // currentBlock Current block number on origin chain
-    function checkAndTriggerResolution(bytes32 markId, uint256 currentBlock) external {
+    
+    // Manually check and trigger resolution for a registered mark
+    // Can be called from RNK deployment to force resolution attempt
+    // Useful for marks that may have been registered but callback not yet sent
+    function checkAndResolve(bytes32 markId, uint256 currentBlock) external rnOnly {
         uint256 creationBlock = markCreationBlocks[markId];
-
-        // Verify mark is registered
         require(creationBlock != 0, "Mark not registered");
-
-        // Verify not already triggered
-        require(!resolutionTriggered[markId], "Already triggered");
-
-        // Verify observation window has elapsed
         require(currentBlock >= creationBlock + OBSERVATION_WINDOW_BLOCKS, "Window not elapsed");
 
-        // Mark as triggered
-        resolutionTriggered[markId] = true;
-
-        emit ResolutionTriggered(markId, currentBlock);
-
-        // In production Reactive deployment, would send callback transaction
-        // to origin chain calling remembraMarkHook.resolveMark(markId)
-        //
-        // The callback would be authenticated via CALLBACK_PROXY_ADDR
-        // RemembraMark validates eligibility before performing state transition
-        //
-        // For testnet/demo: External relayer or script calls resolveMark()
+        _triggerResolutionCallback(markId);
     }
 
-    // Manually register a mark (for testing or off-chain indexer)
-    // markId The exposure mark identifier
-    // creationBlock Block number when mark was created
-    function manualRegisterMark(bytes32 markId, uint256 creationBlock) external {
-        _registerMark(markId, creationBlock);
+    
+    // Internal function to emit callback event for mark resolution
+    // Callback will be delivered to destination chain by Reactive Network
+    function _triggerResolutionCallback(bytes32 markId) internal {
+        emit ResolutionCallbackTriggered(markId, block.number);
+
+        // Prepare callback payload
+        // The destination contract must implement: resolveMark(bytes32 markId)
+        // Reactive Network will deliver this to the origin chain
+        bytes memory payload = abi.encodeWithSignature("resolveMark(bytes32)", markId);
+
+        // Emit Callback event (Reactive Network intercepts and delivers)
+        emit Callback(
+            originChainId, // Destination chain
+            remembraMarkHook, // Destination contract
+            1000000, // Gas limit for callback
+            payload // Encoded function call
+        );
     }
 
-    // Check if mark is ready for resolution
-    // markId The exposure mark identifier
-    // currentBlock Current block number on origin chain
-    // ready True if observation window has elapsed
-    function isReadyForResolution(bytes32 markId, uint256 currentBlock) external view returns (bool ready) {
-        uint256 creationBlock = markCreationBlocks[markId];
-        if (creationBlock == 0) {
-            return false;
-        }
-        if (resolutionTriggered[markId]) {
-            return false;
-        }
-        return currentBlock >= creationBlock + OBSERVATION_WINDOW_BLOCKS;
-    }
-
-    // Get creation block for a mark
-    // markId The exposure mark identifier
+    
+    // Get creation block for a registered mark
     // creationBlock Block number when mark was created (0 if not registered)
-    function getMarkCreationBlock(bytes32 markId) external view returns (uint256 creationBlock) {
+    function getMarkCreationBlock(bytes32 markId) external view returns (uint256) {
         return markCreationBlocks[markId];
+    }
+
+    // if mark is ready for resolution based on current block
+    // ready True if observation window has elapsed
+    function isReadyForResolution(bytes32 markId, uint256 currentBlock) external view returns (bool) {
+        uint256 creationBlock = markCreationBlocks[markId];
+        if (creationBlock == 0) return false;
+        return currentBlock >= creationBlock + OBSERVATION_WINDOW_BLOCKS;
     }
 }
